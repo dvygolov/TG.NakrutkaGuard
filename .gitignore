@@ -1,0 +1,14 @@
+.env
+data/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+*.db
+*.db-journal
+*.log
+nakrutkaguard.log
+nakrutkaguard.service.log

@@ -1,0 +1,16 @@
+# Shell scripts must have LF line endings (for Linux)
+*.sh text eol=lf
+
+# Python files
+*.py text eol=lf
+
+# Text files
+*.md text
+*.txt text
+*.json text
+*.toml text
+*.yaml text
+*.yml text
+
+# Environment files
+.env* text
