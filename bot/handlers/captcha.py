@@ -11,6 +11,12 @@ import time
 router = Router()
 
 
+def _is_not_command(message: Message) -> bool:
+    """True если сообщение не команда."""
+    text = message.text or message.caption or ""
+    return not text.startswith("/")
+
+
 async def send_captcha(bot: Bot, chat_id: int, user_id: int, username: str = None):
     """
     Отправить капчу пользователю
@@ -194,7 +200,7 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
             print(f"[CAPTCHA] Ошибка кика user={user_id} за неправильный ответ: {e}")
 
 
-@router.message(~Command(), F.chat.type.in_({"group", "supergroup"}))
+@router.message(_is_not_command, F.chat.type.in_({"group", "supergroup"}))
 async def handle_group_messages(message: Message, bot: Bot):
     """Обработка сообщений в группах"""
     chat_id = message.chat.id
