@@ -189,7 +189,12 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
         if welcome_text:
             try:
                 formatted_text = _format_welcome_text(welcome_text, callback)
-                welcome_msg = await bot.send_message(chat_id, formatted_text)
+                welcome_msg = await bot.send_message(
+                    chat_id,
+                    formatted_text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
                 asyncio.create_task(delete_message_later(bot, chat_id, welcome_msg.message_id, delay=180))
             except Exception as e:
                 print(f"[CAPTCHA] Не удалось отправить приветствие: {e}")
