@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from bot.database import db
 from bot.config import ADMIN_IDS, DEFAULT_THRESHOLD, DEFAULT_TIME_WINDOW, DEFAULT_PROTECT_PREMIUM
@@ -181,7 +182,7 @@ async def start_set_welcome(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(TextSettingsStates.waiting_for_welcome)
+@router.message(StateFilter(TextSettingsStates.waiting_for_welcome))
 async def process_welcome_message(message: Message, state: FSMContext):
     """Сохранить новое приветствие"""
     if not is_admin(message.from_user.id):
@@ -241,7 +242,7 @@ async def start_set_rules(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(TextSettingsStates.waiting_for_rules)
+@router.message(StateFilter(TextSettingsStates.waiting_for_rules))
 async def process_rules_message(message: Message, state: FSMContext):
     """Сохранить текст правил"""
     if not is_admin(message.from_user.id):
@@ -438,7 +439,7 @@ async def start_set_threshold(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(ChangeSettingsStates.waiting_for_threshold)
+@router.message(StateFilter(ChangeSettingsStates.waiting_for_threshold))
 async def process_threshold(message: Message, state: FSMContext):
     """Обработать новый порог"""
     if not is_admin(message.from_user.id):
@@ -481,7 +482,7 @@ async def start_set_window(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(ChangeSettingsStates.waiting_for_window)
+@router.message(StateFilter(ChangeSettingsStates.waiting_for_window))
 async def process_window(message: Message, state: FSMContext):
     """Обработать новое окно"""
     if not is_admin(message.from_user.id):
