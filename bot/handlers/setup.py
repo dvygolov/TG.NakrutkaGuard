@@ -22,6 +22,11 @@ class AddChatStates(StatesGroup):
     waiting_for_chat_id = State()
 
 
+class TextSettingsStates(StatesGroup):
+    waiting_for_welcome = State()
+    waiting_for_rules = State()
+
+
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     """Главное меню настроек"""
     buttons = [
@@ -415,11 +420,6 @@ async def remove_chat(callback: CallbackQuery):
 class ChangeSettingsStates(StatesGroup):
     waiting_for_threshold = State()
     waiting_for_window = State()
-
-
-class TextSettingsStates(StatesGroup):
-    waiting_for_welcome = State()
-    waiting_for_rules = State()
 
 
 @router.callback_query(F.data.startswith("set_threshold_"))
