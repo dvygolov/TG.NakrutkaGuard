@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run NakrutkaGuard Bot",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "bot.main",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug NakrutkaGuard Bot",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "bot.main",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "envFile": "${workspaceFolder}/.env",
+            "cwd": "${workspaceFolder}",
+            "logToFile": true
+        }
+    ]
+}

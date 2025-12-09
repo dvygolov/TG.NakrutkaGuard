@@ -22,15 +22,23 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_chat_settings_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKeyboardMarkup:
     """Клавиатура настроек конкретного чата"""
     buttons = [
         [InlineKeyboardButton(text="⚙️ Изменить порог", callback_data=f"set_threshold_{chat_id}")],
         [InlineKeyboardButton(text="⏱ Изменить окно", callback_data=f"set_window_{chat_id}")],
         [InlineKeyboardButton(text="👑 Premium защита", callback_data=f"toggle_premium_{chat_id}")],
+    ]
+    
+    # Капча только для групп (не для каналов)
+    if is_group:
+        buttons.append([InlineKeyboardButton(text="🤖 Капча для вступающих", callback_data=f"toggle_captcha_{chat_id}")])
+    
+    buttons.extend([
         [InlineKeyboardButton(text="🗑 Удалить чат", callback_data=f"remove_chat_{chat_id}")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="list_chats")],
-    ]
+    ])
+    
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -176,20 +184,27 @@ async def list_chats(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("chat_"))
-async def show_chat_settings(callback: CallbackQuery):
-    """Показать настройки чата"""
-    chat_id = int(callback.data.split("_")[1])
+async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
+    """Внутренняя функция для отображения настроек чата"""
     chat_data = await db.get_chat(chat_id)
     
     if not chat_data:
         await callback.answer("❌ Чат не найден", show_alert=True)
         return
     
+    # Определяем тип чата
+    try:
+        chat_info = await callback.bot.get_chat(chat_id)
+        is_group = chat_info.type in ["group", "supergroup"]
+    except:
+        is_group = True  # По умолчанию считаем группой
+    
     status = "🟢 АКТИВЕН" if chat_data['protection_active'] else "⚪️ ВЫКЛЮЧЕН"
     premium = "✅ Да" if chat_data['protect_premium'] else "❌ Нет"
+    captcha = "✅ Да" if chat_data.get('captcha_enabled', False) else "❌ Нет"
     
-    await callback.message.edit_text(
+    # Формируем текст
+    text = (
         f"⚙️ <b>Настройки чата</b>\n\n"
         f"📝 Название: {chat_data['title']}\n"
         f"🆔 ID: <code>{chat_id}</code>\n"
@@ -197,11 +212,26 @@ async def show_chat_settings(callback: CallbackQuery):
         f"🛡 Режим защиты: {status}\n"
         f"📊 Порог: {chat_data['threshold']} вступлений\n"
         f"⏱ Временное окно: {chat_data['time_window']} секунд\n"
-        f"👑 Защита Premium: {premium}",
-        reply_markup=get_chat_settings_keyboard(chat_id),
+        f"👑 Защита Premium: {premium}"
+    )
+    
+    # Добавляем капчу только для групп
+    if is_group:
+        text += f"\n🤖 Капча: {captcha}"
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_chat_settings_keyboard(chat_id, is_group),
         parse_mode="HTML"
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("chat_"))
+async def show_chat_settings(callback: CallbackQuery):
+    """Показать настройки чата"""
+    chat_id = int(callback.data.split("_")[1])
+    await _show_chat_settings_message(callback, chat_id)
 
 
 @router.callback_query(F.data.startswith("toggle_premium_"))
@@ -217,7 +247,23 @@ async def toggle_premium_protection(callback: CallbackQuery):
         f"✅ Premium защита: {'Включена' if new_value else 'Выключена'}",
         show_alert=True
     )
-    await show_chat_settings(callback)
+    await _show_chat_settings_message(callback, chat_id)
+
+
+@router.callback_query(F.data.startswith("toggle_captcha_"))
+async def toggle_captcha(callback: CallbackQuery):
+    """Переключить капчу для вступающих"""
+    chat_id = int(callback.data.split("_")[2])
+    chat_data = await db.get_chat(chat_id)
+    
+    new_value = not chat_data.get('captcha_enabled', False)
+    await db.update_chat_settings(chat_id, captcha_enabled=new_value)
+    
+    await callback.answer(
+        f"✅ Капча: {'Включена' if new_value else 'Выключена'}",
+        show_alert=True
+    )
+    await _show_chat_settings_message(callback, chat_id)
 
 
 @router.callback_query(F.data.startswith("remove_chat_"))

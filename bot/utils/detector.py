@@ -87,8 +87,11 @@ class AttackDetector:
                 stats = await db.get_last_attack_stats(chat_id)
                 if stats:
                     duration = stats['end_time'] - stats['start_time']
+                    total_joins = await db.count_joins_during_attack(
+                        chat_id, stats['start_time'], stats['end_time']
+                    )
                     chat_logger.log_attack_end(
-                        chat_id, chat_username, duration, stats['total_kicked']
+                        chat_id, chat_username, duration, total_joins, stats['total_kicked']
                     )
                     chat_logger.log_protection_mode(chat_id, chat_username, False)
         
@@ -106,12 +109,16 @@ class AttackDetector:
                 chat_logger.log_attack_start(chat_id, chat_username, threshold, recent_joins)
                 chat_logger.log_protection_mode(chat_id, chat_username, True)
                 
-                # Кикаем ВСЕХ из окна (кроме premium)
+                # Кикаем ВСЕХ из окна (кроме premium и текущего - его отдельно)
                 users_in_window = await db.get_users_in_window(chat_id, time_window)
                 result['users_to_kick'] = []
                 
                 for user_data in users_in_window:
+                    # Пропускаем premium
                     if user_data['is_premium'] and protect_premium:
+                        continue
+                    # Пропускаем текущего юзера (его кикнем отдельно)
+                    if user_data['user_id'] == user.id:
                         continue
                     result['users_to_kick'].append(user_data['user_id'])
                 
@@ -134,9 +141,15 @@ class AttackDetector:
         duration_min = duration // 60
         duration_sec = duration % 60
         
+        # Считаем общее кол-во вступлений за атаку
+        total_joins = await db.count_joins_during_attack(
+            chat_id, stats['start_time'], stats['end_time']
+        )
+        
         message = (
             f"✅ <b>АТАКА ЗАВЕРШЕНА</b>\n\n"
             f"⏱ Длительность: {duration_min}м {duration_sec}с\n"
+            f"👥 Всего вступлений: {total_joins}\n"
             f"🚫 Кикнуто: {stats['total_kicked']}\n"
         )
         

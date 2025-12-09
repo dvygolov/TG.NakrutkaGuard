@@ -7,7 +7,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.config import BOT_TOKEN
 from bot.database import db
-from bot.handlers import setup, members
+from bot.handlers import setup, members, captcha
 
 # Настройка логирования
 logging.basicConfig(
@@ -42,6 +42,7 @@ async def main():
     
     # Регистрация роутеров
     dp.include_router(setup.router)
+    dp.include_router(captcha.router)  # Капча должна быть ДО members (фильтр сообщений)
     dp.include_router(members.router)
     
     # Запуск polling

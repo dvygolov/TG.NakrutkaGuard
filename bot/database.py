@@ -31,6 +31,7 @@ class Database:
                 time_window INTEGER DEFAULT 60,
                 protection_active BOOLEAN DEFAULT 0,
                 protect_premium BOOLEAN DEFAULT 1,
+                captcha_enabled BOOLEAN DEFAULT 0,
                 added_at INTEGER NOT NULL
             );
 
@@ -56,6 +57,19 @@ class Database:
                 total_kicked INTEGER DEFAULT 0,
                 FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
             );
+
+            CREATE TABLE IF NOT EXISTS pending_captcha (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                correct_answer TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_captcha_expires ON pending_captcha(expires_at);
         ''')
         await self._connection.commit()
 
@@ -202,6 +216,59 @@ class Database:
         ''', (chat_id,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+    async def count_joins_during_attack(self, chat_id: int, start_time: int, end_time: int) -> int:
+        """Подсчитать кол-во вступлений за период атаки"""
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM join_events 
+            WHERE chat_id = ? AND join_time >= ? AND join_time <= ?
+        ''', (chat_id, start_time, end_time)) as cursor:
+            row = await cursor.fetchone()
+            return row['count'] if row else 0
+
+    # === CAPTCHA ===
+
+    async def add_pending_captcha(self, chat_id: int, user_id: int, message_id: int, 
+                                  correct_answer: str, expires_at: int):
+        """Добавить юзера в ожидание прохождения капчи"""
+        await self._connection.execute('''
+            INSERT OR REPLACE INTO pending_captcha 
+            (chat_id, user_id, message_id, correct_answer, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (chat_id, user_id, message_id, correct_answer, int(time.time()), expires_at))
+        await self._connection.commit()
+
+    async def get_pending_captcha(self, chat_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """Получить данные капчи для юзера"""
+        async with self._connection.execute('''
+            SELECT * FROM pending_captcha WHERE chat_id = ? AND user_id = ?
+        ''', (chat_id, user_id)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def remove_pending_captcha(self, chat_id: int, user_id: int):
+        """Удалить капчу из pending (юзер прошёл или забанен)"""
+        await self._connection.execute('''
+            DELETE FROM pending_captcha WHERE chat_id = ? AND user_id = ?
+        ''', (chat_id, user_id))
+        await self._connection.commit()
+
+    async def get_expired_captchas(self) -> List[Dict[str, Any]]:
+        """Получить все просроченные капчи"""
+        current_time = int(time.time())
+        async with self._connection.execute('''
+            SELECT * FROM pending_captcha WHERE expires_at <= ?
+        ''', (current_time,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def is_captcha_enabled(self, chat_id: int) -> bool:
+        """Проверить включена ли капча для чата"""
+        async with self._connection.execute(
+            'SELECT captcha_enabled FROM chats WHERE chat_id = ?', (chat_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row['captcha_enabled']) if row else False
 
 
 # Глобальный экземпляр

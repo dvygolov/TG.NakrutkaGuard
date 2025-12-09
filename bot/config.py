@@ -20,3 +20,4 @@ LOGS_DIR.mkdir(exist_ok=True)
 DEFAULT_THRESHOLD = 10  # вступлений за окно
 DEFAULT_TIME_WINDOW = 60  # секунд
 DEFAULT_PROTECT_PREMIUM = True
+DEFAULT_CAPTCHA_ENABLED = False  # капча выключена по умолчанию

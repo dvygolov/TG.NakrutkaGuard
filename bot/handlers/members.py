@@ -5,6 +5,7 @@ from bot.utils.detector import detector
 from bot.utils.logger import chat_logger
 from bot.database import db
 from bot.config import ADMIN_IDS
+from bot.handlers.captcha import send_captcha
 import asyncio
 
 router = Router()
@@ -54,6 +55,23 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     if result['reason'] == 'chat_not_protected':
         return
     
+    # === КАПЧА (только для групп в обычном режиме) ===
+    chat_data = await db.get_chat(chat.id)
+    is_group = chat.type in ["group", "supergroup"]
+    captcha_enabled = chat_data and chat_data.get('captcha_enabled', False)
+    protection_active = chat_data and chat_data.get('protection_active', False)
+    
+    # Показываем капчу если:
+    # 1. Это группа (не канал)
+    # 2. Капча включена
+    # 3. НЕ режим атаки
+    # 4. Юзер не бот (ботов сразу кикаем)
+    if is_group and captcha_enabled and not protection_active and not user.is_bot:
+        # Отправляем капчу
+        await send_captcha(bot, chat.id, user.id, user.username)
+        # Больше ничего не делаем - ждём прохождения капчи
+        return
+    
     # Если началась атака
     if result['attack_started']:
         # Уведомляем админов
@@ -69,12 +87,19 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                 chat_logger.log_kick(chat.id, chat.username, user_id, None, "attack_window")
             
             # Выполняем кики параллельно (батчами по 50)
+            kicked_count = 0
             for i in range(0, len(kick_tasks), 50):
                 batch = kick_tasks[i:i+50]
-                await asyncio.gather(*batch, return_exceptions=True)
+                results = await asyncio.gather(*batch, return_exceptions=True)
+                # Считаем успешные кики
+                kicked_count += sum(1 for r in results if r is True)
                 # Небольшая задержка между батчами чтобы не словить rate limit
                 if i + 50 < len(kick_tasks):
                     await asyncio.sleep(1)
+            
+            # Обновляем счётчик кикнутых в БД
+            for _ in range(kicked_count):
+                await db.increment_kicked(chat.id)
     
     # Если атака закончилась
     if result['attack_ended']:

@@ -13,10 +13,10 @@ fi
 source "$VENV_DIR/bin/activate"
 
 echo "[NakrutkaGuard] Upgrading pip & wheel..."
-pip install --upgrade pip wheel >/dev/null
+pip install --no-cache-dir --upgrade pip wheel >/dev/null
 
 echo "[NakrutkaGuard] Installing project requirements..."
-pip install -r "$PROJECT_ROOT/requirements.txt"
+pip install --no-cache-dir -r "$PROJECT_ROOT/requirements.txt"
 
 deactivate
 

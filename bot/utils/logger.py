@@ -78,14 +78,14 @@ class ChatLogger:
         )
     
     def log_attack_end(self, chat_id: int, username: Optional[str], 
-                      duration_seconds: int, total_kicked: int):
+                      duration_seconds: int, total_joins: int, total_kicked: int):
         """Логировать конец атаки"""
         logger = self._get_logger(chat_id, username)
         duration_min = duration_seconds // 60
         duration_sec = duration_seconds % 60
         logger.warning(
             f"ATTACK ENDED | Duration: {duration_min}m {duration_sec}s | "
-            f"Total kicked: {total_kicked}"
+            f"Total joins: {total_joins} | Kicked: {total_kicked}"
         )
     
     def log_protection_mode(self, chat_id: int, username: Optional[str], enabled: bool):
