@@ -7,6 +7,7 @@ from bot.utils.captcha import captcha_gen
 from bot.utils.logger import chat_logger
 from bot.utils.message_utils import delete_message_later
 import time
+import html
 
 router = Router()
 
@@ -15,6 +16,21 @@ def _is_not_command(message: Message) -> bool:
     """True если сообщение не команда."""
     text = message.text or message.caption or ""
     return not text.startswith("/")
+
+
+def _format_welcome_text(template: str, user: Message | CallbackQuery) -> str:
+    """Подставляет макросы в приветственном сообщении."""
+    user_obj = user.from_user if hasattr(user, "from_user") else None
+    if not user_obj:
+        return template.replace("{username}", "")
+    
+    if user_obj.username:
+        mention = f"@{user_obj.username}"
+    else:
+        full_name = user_obj.full_name or "пользователь"
+        mention = f'<a href="tg://user?id={user_obj.id}">{html.escape(full_name)}</a>'
+    
+    return template.replace("{username}", mention)
 
 
 async def send_captcha(bot: Bot, chat_id: int, user_id: int, username: str = None):
@@ -170,7 +186,8 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
         welcome_text = chat_data.get('welcome_message') if chat_data else None
         if welcome_text:
             try:
-                welcome_msg = await bot.send_message(chat_id, welcome_text)
+                formatted_text = _format_welcome_text(welcome_text, callback)
+                welcome_msg = await bot.send_message(chat_id, formatted_text)
                 asyncio.create_task(delete_message_later(bot, chat_id, welcome_msg.message_id, delay=180))
             except Exception as e:
                 print(f"[CAPTCHA] Не удалось отправить приветствие: {e}")
