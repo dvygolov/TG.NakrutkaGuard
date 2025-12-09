@@ -50,11 +50,12 @@ async def send_captcha(bot: Bot, chat_id: int, user_id: int, username: str = Non
         print(f"[CAPTCHA] Сгенерирована капча, правильный ответ: {correct_answer}")
         
         # Отправляем сообщение
-        user_mention = (
-            f"@{username}"
-            if username
-            else f'<a href="tg://user?id={user_id}">ID: {user_id}</a>'
-        )
+        if username:
+            user_mention = f"@{username}"
+        else:
+            full_name = callback.from_user.full_name or f"ID: {user_id}"
+            escaped_name = html.escape(full_name)
+            user_mention = f'<a href="tg://user?id={user_id}">{escaped_name}</a>'
         text = (
             f"{user_mention}, чтобы вступить, пройдите проверку.\n\n"
             f"{question}"
