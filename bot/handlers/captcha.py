@@ -194,7 +194,7 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
             print(f"[CAPTCHA] Ошибка кика user={user_id} за неправильный ответ: {e}")
 
 
-@router.message(F.chat.type.in_({"group", "supergroup"}))
+@router.message(~Command(), F.chat.type.in_({"group", "supergroup"}))
 async def handle_group_messages(message: Message, bot: Bot):
     """Обработка сообщений в группах"""
     chat_id = message.chat.id
