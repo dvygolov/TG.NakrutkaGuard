@@ -33,7 +33,23 @@ async def migrate():
         else:
             print("✓ captcha_enabled уже есть")
         
-        # 2. Проверяем есть ли таблица pending_captcha
+        # 2. Добавляем welcome_message
+        if 'welcome_message' not in column_names:
+            print("➕ Добавляем welcome_message в chats...")
+            await db.execute('ALTER TABLE chats ADD COLUMN welcome_message TEXT')
+            print("✅ welcome_message добавлен")
+        else:
+            print("✓ welcome_message уже есть")
+
+        # 3. Добавляем rules_message
+        if 'rules_message' not in column_names:
+            print("➕ Добавляем rules_message в chats...")
+            await db.execute('ALTER TABLE chats ADD COLUMN rules_message TEXT')
+            print("✅ rules_message добавлен")
+        else:
+            print("✓ rules_message уже есть")
+
+        # 4. Проверяем есть ли таблица pending_captcha
         cursor = await db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_captcha'"
         )

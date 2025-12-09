@@ -1,10 +1,11 @@
 import asyncio
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
-from aiogram.filters import ChatMemberUpdatedFilter, MEMBER
+from aiogram.filters import ChatMemberUpdatedFilter, MEMBER, Command
 from bot.database import db
 from bot.utils.captcha import captcha_gen
 from bot.utils.logger import chat_logger
+from bot.utils.message_utils import delete_message_later
 import time
 
 router = Router()
@@ -157,6 +158,16 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
         # Удаляем из pending
         await db.remove_pending_captcha(chat_id, user_id)
         print(f"[CAPTCHA] User={user_id} удалён из pending")
+
+        # Приветственное сообщение
+        chat_data = await db.get_chat(chat_id)
+        welcome_text = chat_data.get('welcome_message') if chat_data else None
+        if welcome_text:
+            try:
+                welcome_msg = await bot.send_message(chat_id, welcome_text)
+                asyncio.create_task(delete_message_later(bot, chat_id, welcome_msg.message_id, delay=180))
+            except Exception as e:
+                print(f"[CAPTCHA] Не удалось отправить приветствие: {e}")
         
     else:
         # НЕПРАВИЛЬНЫЙ ОТВЕТ - бан
@@ -216,3 +227,27 @@ async def handle_group_messages(message: Message, bot: Bot):
                 print(f"[CAPTCHA] Сообщение от user={user_id} удалено")
             except Exception as e:
                 print(f"[CAPTCHA] Ошибка удаления сообщения от pending user {user_id}: {e}")
+
+
+@router.message(Command("rules"))
+async def handle_rules_command(message: Message, bot: Bot):
+    """Вывод правил чата по команде /rules"""
+    chat_id = message.chat.id
+    chat_data = await db.get_chat(chat_id)
+    
+    if not chat_data:
+        return
+    
+    rules_text = chat_data.get('rules_message')
+    
+    if not rules_text:
+        reply_text = "ℹ️ Правила ещё не заданы для этого чата."
+    else:
+        reply_text = rules_text
+    
+    try:
+        rules_message = await bot.send_message(chat_id, reply_text)
+        asyncio.create_task(delete_message_later(bot, chat_id, rules_message.message_id, delay=180))
+        asyncio.create_task(delete_message_later(bot, chat_id, message.message_id, delay=180))
+    except Exception as e:
+        print(f"[RULES] Не удалось отправить правила: {e}")

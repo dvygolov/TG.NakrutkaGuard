@@ -137,6 +137,11 @@ class AttackDetector:
         if not stats:
             return None
         
+        chat_data = await db.get_chat(chat_id)
+        chat_title = chat_data['title'] if chat_data else str(chat_id)
+        chat_username = chat_data.get('username') if chat_data else None
+        chat_ref = f"@{chat_username}" if chat_username else chat_title
+        
         duration = stats['end_time'] - stats['start_time']
         duration_min = duration // 60
         duration_sec = duration % 60
@@ -147,7 +152,8 @@ class AttackDetector:
         )
         
         message = (
-            f"✅ <b>АТАКА ЗАВЕРШЕНА</b>\n\n"
+            f"✅ <b>АТАКА ЗАВЕРШЕНА</b>\n"
+            f"📍 Чат: {chat_ref}\n\n"
             f"⏱ Длительность: {duration_min}м {duration_sec}с\n"
             f"👥 Всего вступлений: {total_joins}\n"
             f"🚫 Кикнуто: {stats['total_kicked']}\n"
@@ -158,9 +164,13 @@ class AttackDetector:
     async def get_attack_start_message(self, chat_id: int, detected_count: int) -> str:
         """Получить сообщение о начале атаки"""
         chat_data = await db.get_chat(chat_id)
+        chat_title = chat_data['title'] if chat_data else str(chat_id)
+        chat_username = chat_data.get('username') if chat_data else None
+        chat_ref = f"@{chat_username}" if chat_username else chat_title
         
         message = (
-            f"⚠️ <b>АТАКА ОБНАРУЖЕНА</b>\n\n"
+            f"⚠️ <b>АТАКА ОБНАРУЖЕНА</b>\n"
+            f"📍 Чат: {chat_ref}\n\n"
             f"📊 Порог: {chat_data['threshold']} вступлений/{chat_data['time_window']}с\n"
             f"🔴 Обнаружено: {detected_count} вступлений\n"
             f"🛡 Режим защиты: <b>АКТИВЕН</b>"

@@ -9,6 +9,15 @@ from bot.config import ADMIN_IDS, DEFAULT_THRESHOLD, DEFAULT_TIME_WINDOW, DEFAUL
 router = Router()
 
 
+async def _is_group_chat(bot, chat_id: int) -> bool:
+    """Определить является ли чат группой/супергруппой"""
+    try:
+        chat_info = await bot.get_chat(chat_id)
+        return chat_info.type in ["group", "supergroup"]
+    except Exception:
+        return True
+
+
 class AddChatStates(StatesGroup):
     waiting_for_chat_id = State()
 
@@ -33,6 +42,10 @@ def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKey
     # Капча только для групп (не для каналов)
     if is_group:
         buttons.append([InlineKeyboardButton(text="🤖 Капча для вступающих", callback_data=f"toggle_captcha_{chat_id}")])
+        buttons.append([
+            InlineKeyboardButton(text="👋 Приветствие", callback_data=f"set_welcome_{chat_id}"),
+            InlineKeyboardButton(text="📜 Правила /rules", callback_data=f"set_rules_{chat_id}")
+        ])
     
     buttons.extend([
         [InlineKeyboardButton(text="🗑 Удалить чат", callback_data=f"remove_chat_{chat_id}")],
@@ -142,6 +155,126 @@ async def process_chat_id(message: Message, state: FSMContext):
     await state.clear()
 
 
+@router.callback_query(F.data.startswith("set_welcome_"))
+async def start_set_welcome(callback: CallbackQuery, state: FSMContext):
+    """Начать настройку приветственного сообщения"""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    
+    chat_id = int(callback.data.split("_")[2])
+    await state.update_data(chat_id=chat_id)
+    
+    await callback.message.edit_text(
+        "👋 <b>Настройка приветственного сообщения</b>\n\n"
+        "Отправьте текст, который бот будет показывать после успешной капчи.\n"
+        "Сообщение автоматически удаляется через ~3 минуты.\n\n"
+        "Чтобы отключить приветствие, отправьте <code>off</code>.",
+        parse_mode="HTML"
+    )
+    await state.set_state(TextSettingsStates.waiting_for_welcome)
+    await callback.answer()
+
+
+@router.message(TextSettingsStates.waiting_for_welcome)
+async def process_welcome_message(message: Message, state: FSMContext):
+    """Сохранить новое приветствие"""
+    if not is_admin(message.from_user.id):
+        return
+    
+    if not message.text:
+        await message.answer("❌ Отправьте текстовое сообщение.")
+        return
+    
+    text = message.text.strip()
+    data = await state.get_data()
+    chat_id = data.get('chat_id')
+    
+    if not chat_id:
+        await message.answer("⚠️ Чат не найден. Попробуйте ещё раз.")
+        await state.clear()
+        return
+    
+    if text.lower() in {"off", "disable", "none", "0"}:
+        welcome_text = None
+        status_text = "Приветствие отключено."
+    else:
+        if len(text) > 1000:
+            await message.answer("❌ Слишком длинное сообщение (лимит 1000 символов).")
+            return
+        welcome_text = text
+        status_text = "Приветствие сохранено."
+    
+    await db.update_chat_settings(chat_id, welcome_message=welcome_text)
+    
+    is_group = await _is_group_chat(message.bot, chat_id)
+    await message.answer(
+        f"✅ {status_text}",
+        reply_markup=get_chat_settings_keyboard(chat_id, is_group=is_group)
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("set_rules_"))
+async def start_set_rules(callback: CallbackQuery, state: FSMContext):
+    """Начать настройку текста /rules"""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    
+    chat_id = int(callback.data.split("_")[2])
+    await state.update_data(chat_id=chat_id)
+    
+    await callback.message.edit_text(
+        "📜 <b>Настройка правил (/rules)</b>\n\n"
+        "Отправьте текст правил. Пользователи смогут получить его командой <code>/rules</code>, "
+        "бот удалит сообщение через ~3 минуты.\n\n"
+        "Чтобы отключить правила, отправьте <code>off</code>.",
+        parse_mode="HTML"
+    )
+    await state.set_state(TextSettingsStates.waiting_for_rules)
+    await callback.answer()
+
+
+@router.message(TextSettingsStates.waiting_for_rules)
+async def process_rules_message(message: Message, state: FSMContext):
+    """Сохранить текст правил"""
+    if not is_admin(message.from_user.id):
+        return
+    
+    if not message.text:
+        await message.answer("❌ Отправьте текстовое сообщение.")
+        return
+    
+    text = message.text.strip()
+    data = await state.get_data()
+    chat_id = data.get('chat_id')
+    
+    if not chat_id:
+        await message.answer("⚠️ Чат не найден. Попробуйте ещё раз.")
+        await state.clear()
+        return
+    
+    if text.lower() in {"off", "disable", "none", "0"}:
+        rules_text = None
+        status_text = "Правила отключены."
+    else:
+        if len(text) > 1500:
+            await message.answer("❌ Слишком длинное сообщение (лимит 1500 символов).")
+            return
+        rules_text = text
+        status_text = "Правила сохранены."
+    
+    await db.update_chat_settings(chat_id, rules_message=rules_text)
+    
+    is_group = await _is_group_chat(message.bot, chat_id)
+    await message.answer(
+        f"✅ {status_text}",
+        reply_markup=get_chat_settings_keyboard(chat_id, is_group=is_group)
+    )
+    await state.clear()
+
+
 @router.callback_query(F.data == "list_chats")
 async def list_chats(callback: CallbackQuery):
     """Показать список всех чатов"""
@@ -193,11 +326,7 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
         return
     
     # Определяем тип чата
-    try:
-        chat_info = await callback.bot.get_chat(chat_id)
-        is_group = chat_info.type in ["group", "supergroup"]
-    except:
-        is_group = True  # По умолчанию считаем группой
+    is_group = await _is_group_chat(callback.bot, chat_id)
     
     status = "🟢 АКТИВЕН" if chat_data['protection_active'] else "⚪️ ВЫКЛЮЧЕН"
     premium = "✅ Да" if chat_data['protect_premium'] else "❌ Нет"
@@ -217,7 +346,13 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
     
     # Добавляем капчу только для групп
     if is_group:
-        text += f"\n🤖 Капча: {captcha}"
+        welcome_status = "✅ Настроено" if chat_data.get('welcome_message') else "⚪️ Нет"
+        rules_status = "✅ Настроены" if chat_data.get('rules_message') else "⚪️ Нет"
+        text += (
+            f"\n🤖 Капча: {captcha}"
+            f"\n👋 Приветствие: {welcome_status}"
+            f"\n📜 Правила /rules: {rules_status}"
+        )
     
     await callback.message.edit_text(
         text,
@@ -280,6 +415,11 @@ async def remove_chat(callback: CallbackQuery):
 class ChangeSettingsStates(StatesGroup):
     waiting_for_threshold = State()
     waiting_for_window = State()
+
+
+class TextSettingsStates(StatesGroup):
+    waiting_for_welcome = State()
+    waiting_for_rules = State()
 
 
 @router.callback_query(F.data.startswith("set_threshold_"))

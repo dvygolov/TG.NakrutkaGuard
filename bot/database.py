@@ -32,6 +32,8 @@ class Database:
                 protection_active BOOLEAN DEFAULT 0,
                 protect_premium BOOLEAN DEFAULT 1,
                 captcha_enabled BOOLEAN DEFAULT 0,
+                welcome_message TEXT,
+                rules_message TEXT,
                 added_at INTEGER NOT NULL
             );
 
@@ -80,8 +82,9 @@ class Database:
         """Добавить чат под защиту"""
         await self._connection.execute('''
             INSERT OR REPLACE INTO chats (chat_id, title, username, threshold, time_window, 
-                                         protection_active, protect_premium, added_at)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                                         protection_active, protect_premium, captcha_enabled,
+                                         welcome_message, rules_message, added_at)
+            VALUES (?, ?, ?, ?, ?, 0, ?, 0, NULL, NULL, ?)
         ''', (chat_id, title, username, threshold, time_window, protect_premium, int(time.time())))
         await self._connection.commit()
 
