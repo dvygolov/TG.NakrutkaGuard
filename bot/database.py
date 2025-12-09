@@ -105,13 +105,23 @@ class Database:
         )
         await self._connection.commit()
 
-    async def set_protection_active(self, chat_id: int, active: bool):
-        """Включить/выключить режим защиты"""
-        await self._connection.execute(
-            'UPDATE chats SET protection_active = ? WHERE chat_id = ?',
-            (active, chat_id)
-        )
+    async def set_protection_active(self, chat_id: int, active: bool) -> bool:
+        """Включить/выключить режим защиты. Возвращает True если состояние изменилось."""
+        if active:
+            query = '''
+                UPDATE chats
+                SET protection_active = 1
+                WHERE chat_id = ? AND protection_active = 0
+            '''
+        else:
+            query = '''
+                UPDATE chats
+                SET protection_active = 0
+                WHERE chat_id = ? AND protection_active = 1
+            '''
+        cursor = await self._connection.execute(query, (chat_id,))
         await self._connection.commit()
+        return cursor.rowcount > 0
 
     async def is_protection_active(self, chat_id: int) -> bool:
         """Проверить активен ли режим защиты"""

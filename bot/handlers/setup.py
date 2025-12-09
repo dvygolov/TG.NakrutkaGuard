@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -181,7 +181,7 @@ async def start_set_welcome(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(TextSettingsStates.waiting_for_welcome))
+@router.message(TextSettingsStates.waiting_for_welcome)
 async def process_welcome_message(message: Message, state: FSMContext):
     """Сохранить новое приветствие"""
     if not is_admin(message.from_user.id):
@@ -241,7 +241,7 @@ async def start_set_rules(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(TextSettingsStates.waiting_for_rules))
+@router.message(TextSettingsStates.waiting_for_rules)
 async def process_rules_message(message: Message, state: FSMContext):
     """Сохранить текст правил"""
     if not is_admin(message.from_user.id):

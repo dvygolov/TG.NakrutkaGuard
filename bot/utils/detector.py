@@ -77,50 +77,53 @@ class AttackDetector:
             
             # Проверяем не пора ли выключить защиту
             if recent_joins < threshold:
-                # Атака закончилась!
-                await db.set_protection_active(chat_id, False)
-                await db.end_attack_session(chat_id)
-                
-                result['attack_ended'] = True
-                
-                # Логируем конец атаки
-                stats = await db.get_last_attack_stats(chat_id)
-                if stats:
-                    duration = stats['end_time'] - stats['start_time']
-                    total_joins = await db.count_joins_during_attack(
-                        chat_id, stats['start_time'], stats['end_time']
-                    )
-                    chat_logger.log_attack_end(
-                        chat_id, chat_username, duration, total_joins, stats['total_kicked']
-                    )
-                    chat_logger.log_protection_mode(chat_id, chat_username, False)
+                changed = await db.set_protection_active(chat_id, False)
+                if changed:
+                    # Атака закончилась!
+                    await db.end_attack_session(chat_id)
+                    
+                    result['attack_ended'] = True
+                    
+                    # Логируем конец атаки
+                    stats = await db.get_last_attack_stats(chat_id)
+                    if stats:
+                        duration = stats['end_time'] - stats['start_time']
+                        total_joins = await db.count_joins_during_attack(
+                            chat_id, stats['start_time'], stats['end_time']
+                        )
+                        chat_logger.log_attack_end(
+                            chat_id, chat_username, duration, total_joins, stats['total_kicked']
+                        )
+                        chat_logger.log_protection_mode(chat_id, chat_username, False)
         
         # Обычный режим
         else:
             # Проверяем превышение порога
             if recent_joins >= threshold:
-                # АТАКА! Включаем защиту
-                await db.set_protection_active(chat_id, True)
-                await db.start_attack_session(chat_id)
+                changed = await db.set_protection_active(chat_id, True)
                 
-                result['attack_started'] = True
-                
-                # Логируем начало атаки
-                chat_logger.log_attack_start(chat_id, chat_username, threshold, recent_joins)
-                chat_logger.log_protection_mode(chat_id, chat_username, True)
-                
-                # Кикаем ВСЕХ из окна (кроме premium и текущего - его отдельно)
-                users_in_window = await db.get_users_in_window(chat_id, time_window)
-                result['users_to_kick'] = []
-                
-                for user_data in users_in_window:
-                    # Пропускаем premium
-                    if user_data['is_premium'] and protect_premium:
-                        continue
-                    # Пропускаем текущего юзера (его кикнем отдельно)
-                    if user_data['user_id'] == user.id:
-                        continue
-                    result['users_to_kick'].append(user_data['user_id'])
+                if changed:
+                    # АТАКА! Включаем защиту
+                    await db.start_attack_session(chat_id)
+                    
+                    result['attack_started'] = True
+                    
+                    # Логируем начало атаки
+                    chat_logger.log_attack_start(chat_id, chat_username, threshold, recent_joins)
+                    chat_logger.log_protection_mode(chat_id, chat_username, True)
+                    
+                    # Кикаем ВСЕХ из окна (кроме premium и текущего - его отдельно)
+                    users_in_window = await db.get_users_in_window(chat_id, time_window)
+                    result['users_to_kick'] = []
+                    
+                    for user_data in users_in_window:
+                        # Пропускаем premium
+                        if user_data['is_premium'] and protect_premium:
+                            continue
+                        # Пропускаем текущего юзера (его кикнем отдельно)
+                        if user_data['user_id'] == user.id:
+                            continue
+                        result['users_to_kick'].append(user_data['user_id'])
                 
                 # Кикаем текущего тоже
                 if not (user.is_premium and protect_premium):
