@@ -438,7 +438,7 @@ async def start_set_threshold(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(ChangeSettingsStates.waiting_for_threshold))
+@router.message(ChangeSettingsStates.waiting_for_threshold)
 async def process_threshold(message: Message, state: FSMContext):
     """Обработать новый порог"""
     if not is_admin(message.from_user.id):
@@ -481,7 +481,7 @@ async def start_set_window(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(ChangeSettingsStates.waiting_for_window))
+@router.message(ChangeSettingsStates.waiting_for_window)
 async def process_window(message: Message, state: FSMContext):
     """Обработать новое окно"""
     if not is_admin(message.from_user.id):
