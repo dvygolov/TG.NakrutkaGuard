@@ -50,7 +50,11 @@ async def send_captcha(bot: Bot, chat_id: int, user_id: int, username: str = Non
         print(f"[CAPTCHA] Сгенерирована капча, правильный ответ: {correct_answer}")
         
         # Отправляем сообщение
-        user_mention = f"@{username}" if username else f"ID: {user_id}"
+        user_mention = (
+            f"@{username}"
+            if username
+            else f'<a href="tg://user?id={user_id}">ID: {user_id}</a>'
+        )
         text = (
             f"{user_mention}, чтобы вступить, пройдите проверку.\n\n"
             f"{question}"
@@ -59,7 +63,8 @@ async def send_captcha(bot: Bot, chat_id: int, user_id: int, username: str = Non
         message = await bot.send_message(
             chat_id,
             text,
-            reply_markup=keyboard
+            reply_markup=keyboard,
+            parse_mode="HTML"
         )
         print(f"[CAPTCHA] Сообщение отправлено, message_id={message.message_id}")
         

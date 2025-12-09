@@ -59,7 +59,8 @@ class AttackDetector:
             'should_kick': False,
             'reason': '',
             'attack_started': False,
-            'attack_ended': False
+            'attack_ended': False,
+            'attack_end_message': None
         }
         
         # Режим защиты АКТИВЕН
@@ -83,6 +84,7 @@ class AttackDetector:
                     await db.end_attack_session(chat_id)
                     
                     result['attack_ended'] = True
+                    result['attack_end_message'] = await self.get_attack_stats_message(chat_id)
                     
                     # Логируем конец атаки
                     stats = await db.get_last_attack_stats(chat_id)

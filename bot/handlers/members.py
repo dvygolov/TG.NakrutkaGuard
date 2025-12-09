@@ -104,7 +104,7 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     # Если атака закончилась
     if result['attack_ended']:
         # Уведомляем админов
-        message = await detector.get_attack_stats_message(chat.id)
+        message = result.get('attack_end_message') or await detector.get_attack_stats_message(chat.id)
         if message:
             await notify_admins(bot, chat.id, message)
     
