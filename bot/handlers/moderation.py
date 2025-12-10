@@ -2,6 +2,8 @@ from typing import Sequence
 from aiogram import Router, F, Bot
 from aiogram.types import Message
 from bot.database import db
+from bot.utils.message_utils import delete_message_later
+import asyncio
 
 router = Router()
 
@@ -31,6 +33,20 @@ async def handle_group_messages(message: Message, bot: Bot):
             await bot.delete_message(chat_id, message.message_id)
         except Exception as e:
             print(f"[SYSTEM] Не удалось удалить системное сообщение: {e}")
+        return
+
+    # 1.5. Проверка сообщений от каналов (если запрещено)
+    allow_channel_posts = chat_data.get('allow_channel_posts', True)
+    if not allow_channel_posts and message.sender_chat and not message.from_user:
+        try:
+            await bot.delete_message(chat_id, message.message_id)
+        except Exception as e:
+            print(f"[CHANNEL] Не удалось удалить канал-сообщение: {e}")
+        try:
+            warning = await bot.send_message(chat_id, "Запрещено писать в чат от имени каналов!")
+            asyncio.create_task(delete_message_later(bot, chat_id, warning.message_id, delay=60))
+        except Exception as e:
+            print(f"[CHANNEL] Не удалось отправить предупреждение: {e}")
         return
 
     # 2. Pending капча

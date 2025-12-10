@@ -174,6 +174,9 @@ def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKey
         buttons.append([
             InlineKeyboardButton(text="🚫 Стоп-слова", callback_data=f"set_stopwords_{chat_id}")
         ])
+        buttons.append([
+            InlineKeyboardButton(text="📣 Сообщения от каналов", callback_data=f"toggle_channel_posts_{chat_id}")
+        ])
     
     buttons.extend([
         [InlineKeyboardButton(text="🗑 Удалить чат", callback_data=f"remove_chat_{chat_id}")],
@@ -494,11 +497,13 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
         rules_status = "✅ Настроены" if chat_data.get('rules_message') else "⚪️ Нет"
         stop_words = await db.get_stop_words(chat_id)
         stop_words_status = f"{len(stop_words)} шт." if stop_words else "⚪️ Нет"
+        channel_posts_status = "✅ Разрешены" if chat_data.get('allow_channel_posts', True) else "🚫 Запрещены"
         text += (
             f"\n🤖 Капча: {captcha}"
             f"\n👋 Приветствие: {welcome_status}"
             f"\n📜 Правила /rules: {rules_status}"
             f"\n🚫 Стоп-слова: {stop_words_status}"
+            f"\n📣 Сообщения от каналов: {channel_posts_status}"
         )
     
     await callback.message.edit_text(
@@ -543,6 +548,22 @@ async def toggle_captcha(callback: CallbackQuery):
     
     await callback.answer(
         f"✅ Капча: {'Включена' if new_value else 'Выключена'}",
+        show_alert=True
+    )
+    await _show_chat_settings_message(callback, chat_id)
+
+
+@router.callback_query(F.data.startswith("toggle_channel_posts_"))
+async def toggle_channel_posts(callback: CallbackQuery):
+    """Переключить возможность сообщений от каналов"""
+    chat_id = int(callback.data.split("_")[3])
+    chat_data = await db.get_chat(chat_id)
+    
+    new_value = not chat_data.get('allow_channel_posts', True)
+    await db.update_chat_settings(chat_id, allow_channel_posts=new_value)
+    
+    await callback.answer(
+        f"📣 Сообщения от каналов: {'Разрешены' if new_value else 'Запрещены'}",
         show_alert=True
     )
     await _show_chat_settings_message(callback, chat_id)

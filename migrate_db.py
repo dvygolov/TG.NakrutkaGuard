@@ -49,7 +49,15 @@ async def migrate():
         else:
             print("✓ rules_message уже есть")
 
-        # 4. Проверяем есть ли таблица pending_captcha
+        # 4. Добавляем allow_channel_posts
+        if 'allow_channel_posts' not in column_names:
+            print("➕ Добавляем allow_channel_posts в chats...")
+            await db.execute('ALTER TABLE chats ADD COLUMN allow_channel_posts BOOLEAN DEFAULT 1')
+            print("✅ allow_channel_posts добавлен")
+        else:
+            print("✓ allow_channel_posts уже есть")
+
+        # 5. Проверяем есть ли таблица pending_captcha
         cursor = await db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_captcha'"
         )
