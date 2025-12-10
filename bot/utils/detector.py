@@ -3,6 +3,7 @@ from aiogram.types import Chat, User
 from bot.database import db
 from bot.utils.logger import chat_logger
 import time
+import time
 
 
 class AttackDetector:
@@ -105,8 +106,12 @@ class AttackDetector:
                 changed = await db.set_protection_active(chat_id, True)
                 
                 if changed:
+                    # Вычисляем старт атаки как самое раннее вступление в окне
+                    window_start = await db.get_oldest_join_in_window(chat_id, time_window)
+                    attack_start_time = window_start or int(time.time())
+                    
                     # АТАКА! Включаем защиту
-                    await db.start_attack_session(chat_id)
+                    await db.start_attack_session(chat_id, attack_start_time)
                     
                     result['attack_started'] = True
                     

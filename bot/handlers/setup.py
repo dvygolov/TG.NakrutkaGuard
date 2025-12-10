@@ -5,6 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from bot.database import db
 from bot.config import ADMIN_IDS, DEFAULT_THRESHOLD, DEFAULT_TIME_WINDOW, DEFAULT_PROTECT_PREMIUM
+import html
 
 router = Router()
 
@@ -25,6 +26,23 @@ class AddChatStates(StatesGroup):
 class TextSettingsStates(StatesGroup):
     waiting_for_welcome = State()
     waiting_for_rules = State()
+
+
+def _format_current_text_block(current_text: Optional[str]) -> str:
+    """Формирует блок с превью и raw-текстом для копирования."""
+    if not current_text:
+        return (
+            "🔹 <b>Текущее значение:</b> <i>не задано</i>\n"
+            "🔹 <b>Текст для копирования:</b>\n<code>—</code>"
+        )
+    
+    raw_block = html.escape(current_text)
+    return (
+        "🔹 <b>Текущее значение:</b>\n"
+        f"{current_text}\n\n"
+        "🔹 <b>Текст для копирования:</b>\n"
+        f"<code>{raw_block}</code>"
+    )
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -169,13 +187,19 @@ async def start_set_welcome(callback: CallbackQuery, state: FSMContext):
     
     chat_id = int(callback.data.split("_")[2])
     await state.update_data(chat_id=chat_id)
+    chat_data = await db.get_chat(chat_id)
+    current_welcome = chat_data.get('welcome_message') if chat_data else None
+    current_block = _format_current_text_block(current_welcome)
     
     await callback.message.edit_text(
         "👋 <b>Настройка приветственного сообщения</b>\n\n"
         "Отправьте текст, который бот будет показывать после успешной капчи.\n"
         "Сообщение автоматически удаляется через ~3 минуты.\n\n"
-        "Чтобы отключить приветствие, отправьте <code>off</code>.",
-        parse_mode="HTML"
+        "Поддерживается <b>HTML-разметка</b> и плейсхолдер <code>{username}</code> для упоминания новенького.\n\n"
+        "Чтобы отключить приветствие, отправьте <code>off</code>.\n\n"
+        f"{current_block}",
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
     await state.set_state(TextSettingsStates.waiting_for_welcome)
     await callback.answer()
@@ -191,7 +215,7 @@ async def process_welcome_message(message: Message, state: FSMContext):
         await message.answer("❌ Отправьте текстовое сообщение.")
         return
     
-    text = message.text.strip()
+    plain_text = message.text.strip()
     data = await state.get_data()
     chat_id = data.get('chat_id')
     
@@ -200,14 +224,15 @@ async def process_welcome_message(message: Message, state: FSMContext):
         await state.clear()
         return
     
-    if text.lower() in {"off", "disable", "none", "0"}:
+    if plain_text.lower() in {"off", "disable", "none", "0"}:
         welcome_text = None
         status_text = "Приветствие отключено."
     else:
-        if len(text) > 1000:
+        html_text_value = (message.html_text or message.text or "").strip()
+        if len(html_text_value) > 2000:
             await message.answer("❌ Слишком длинное сообщение (лимит 1000 символов).")
             return
-        welcome_text = text
+        welcome_text = html_text_value
         status_text = "Приветствие сохранено."
     
     await db.update_chat_settings(chat_id, welcome_message=welcome_text)
@@ -229,13 +254,19 @@ async def start_set_rules(callback: CallbackQuery, state: FSMContext):
     
     chat_id = int(callback.data.split("_")[2])
     await state.update_data(chat_id=chat_id)
+    chat_data = await db.get_chat(chat_id)
+    current_rules = chat_data.get('rules_message') if chat_data else None
+    current_block = _format_current_text_block(current_rules)
     
     await callback.message.edit_text(
         "📜 <b>Настройка правил (/rules)</b>\n\n"
         "Отправьте текст правил. Пользователи смогут получить его командой <code>/rules</code>, "
         "бот удалит сообщение через ~3 минуты.\n\n"
-        "Чтобы отключить правила, отправьте <code>off</code>.",
-        parse_mode="HTML"
+        "Можно использовать <b>HTML-разметку</b> и ссылки.\n\n"
+        "Чтобы отключить правила, отправьте <code>off</code>.\n\n"
+        f"{current_block}",
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
     await state.set_state(TextSettingsStates.waiting_for_rules)
     await callback.answer()
@@ -260,14 +291,15 @@ async def process_rules_message(message: Message, state: FSMContext):
         await state.clear()
         return
     
-    if text.lower() in {"off", "disable", "none", "0"}:
+    if plain_text.lower() in {"off", "disable", "none", "0"}:
         rules_text = None
         status_text = "Правила отключены."
     else:
-        if len(text) > 1500:
+        html_text_value = (message.html_text or message.text or "").strip()
+        if len(html_text_value) > 4000:
             await message.answer("❌ Слишком длинное сообщение (лимит 1500 символов).")
             return
-        rules_text = text
+        rules_text = html_text_value
         status_text = "Правила сохранены."
     
     await db.update_chat_settings(chat_id, rules_message=rules_text)

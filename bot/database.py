@@ -185,12 +185,13 @@ class Database:
 
     # === ATTACK SESSIONS ===
 
-    async def start_attack_session(self, chat_id: int) -> int:
+    async def start_attack_session(self, chat_id: int, start_time: Optional[int] = None) -> int:
         """Начать новую сессию атаки"""
+        start_time = start_time or int(time.time())
         cursor = await self._connection.execute('''
             INSERT INTO attack_sessions (chat_id, start_time)
             VALUES (?, ?)
-        ''', (chat_id, int(time.time())))
+        ''', (chat_id, start_time))
         await self._connection.commit()
         return cursor.lastrowid
 
@@ -232,12 +233,26 @@ class Database:
 
     async def count_joins_during_attack(self, chat_id: int, start_time: int, end_time: int) -> int:
         """Подсчитать кол-во вступлений за период атаки"""
+        return await self.count_joins_between(chat_id, start_time, end_time)
+
+    async def count_joins_between(self, chat_id: int, start_time: int, end_time: int) -> int:
+        """Подсчитать кол-во вступлений в произвольном интервале [start_time, end_time]"""
         async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM join_events 
+            SELECT COUNT(*) as count FROM join_events
             WHERE chat_id = ? AND join_time >= ? AND join_time <= ?
         ''', (chat_id, start_time, end_time)) as cursor:
             row = await cursor.fetchone()
             return row['count'] if row else 0
+
+    async def get_oldest_join_in_window(self, chat_id: int, time_window: int) -> Optional[int]:
+        """Получить минимальное время вступления в текущем окне (для корректного старта атаки)"""
+        cutoff_time = int(time.time()) - time_window
+        async with self._connection.execute('''
+            SELECT MIN(join_time) AS min_time FROM join_events
+            WHERE chat_id = ? AND join_time >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            return row['min_time'] if row and row['min_time'] is not None else None
 
     # === CAPTCHA ===
 
