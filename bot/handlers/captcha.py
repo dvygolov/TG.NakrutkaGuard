@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
@@ -39,8 +37,8 @@ async def send_captcha(
     bot: Bot,
     chat_id: int,
     user_id: int,
-    username: str | None = None,
-    full_name: str | None = None,
+    username: str = None,
+    full_name: str = None,
 ):
     """
     Отправить капчу пользователю
@@ -268,6 +266,25 @@ async def handle_group_messages(message: Message, bot: Bot):
                 print(f"[CAPTCHA] Сообщение от user={user_id} удалено")
             except Exception as e:
                 print(f"[CAPTCHA] Ошибка удаления сообщения от pending user {user_id}: {e}")
+            return
+
+    # 3. Стоп-слова
+    stop_words = await db.get_stop_words(chat_id)
+    if stop_words:
+        content_parts = [
+            message.text,
+            message.caption,
+        ]
+        text_content = " ".join(filter(None, content_parts)).lower()
+        if text_content:
+            for word in stop_words:
+                if word in text_content:
+                    print(f"[STOP_WORD] Удаляю сообщение {message.message_id} из chat={chat_id} за слово '{word}'")
+                    try:
+                        await bot.delete_message(chat_id, message.message_id)
+                    except Exception as e:
+                        print(f"[STOP_WORD] Не удалось удалить message_id={message.message_id}: {e}")
+                    break
 
 
 @router.message(Command("rules"))

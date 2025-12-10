@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -27,6 +27,10 @@ class AddChatStates(StatesGroup):
 class TextSettingsStates(StatesGroup):
     waiting_for_welcome = State()
     waiting_for_rules = State()
+
+
+class StopWordsStates(StatesGroup):
+    waiting_for_words = State()
 
 
 def _format_current_text_block(current_text: Optional[str]) -> str:
@@ -65,6 +69,9 @@ def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKey
         buttons.append([
             InlineKeyboardButton(text="👋 Приветствие", callback_data=f"set_welcome_{chat_id}"),
             InlineKeyboardButton(text="📜 Правила /rules", callback_data=f"set_rules_{chat_id}")
+        ])
+        buttons.append([
+            InlineKeyboardButton(text="🚫 Стоп-слова", callback_data=f"set_stopwords_{chat_id}")
         ])
     
     buttons.extend([
@@ -172,6 +179,76 @@ async def process_chat_id(message: Message, state: FSMContext):
         reply_markup=get_main_menu_keyboard()
     )
     
+    await state.clear()
+
+
+def _parse_stop_words(raw_text: str) -> List[str]:
+    """Разбивает текст на стоп-слова (рожать по строкам/запятым)."""
+    separators = [segment for line in raw_text.splitlines() for segment in line.split(",")]
+    cleaned = [segment.strip().lower() for segment in separators if segment.strip()]
+    return cleaned
+
+
+@router.callback_query(F.data.startswith("set_stopwords_"))
+async def start_set_stopwords(callback: CallbackQuery, state: FSMContext):
+    """Начать настройку стоп-слов"""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    
+    chat_id = int(callback.data.split("_")[2])
+    await state.update_data(chat_id=chat_id)
+    words = await db.get_stop_words(chat_id)
+    preview = ", ".join(words) if words else "<i>не заданы</i>"
+    
+    await callback.message.edit_text(
+        "🚫 <b>Стоп-слова</b>\n\n"
+        "Отправьте список слов/фраз, каждое с новой строки (или через запятую).\n"
+        "Любое сообщение в чате, содержащее одно из слов (без учёта регистра), будет удалено.\n\n"
+        "Чтобы очистить список, отправьте <code>off</code>.\n\n"
+        f"🔹 <b>Текущее значение:</b> {preview}",
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
+    await state.set_state(StopWordsStates.waiting_for_words)
+    await callback.answer()
+
+
+@router.message(StopWordsStates.waiting_for_words)
+async def process_stop_words(message: Message, state: FSMContext):
+    """Сохранить стоп-слова"""
+    if not is_admin(message.from_user.id):
+        return
+    
+    if not message.text:
+        await message.answer("❌ Отправьте список слов текстом.")
+        return
+    
+    raw_text = message.text.strip()
+    data = await state.get_data()
+    chat_id = data.get('chat_id')
+    
+    if not chat_id:
+        await message.answer("⚠️ Чат не найден. Попробуйте снова.")
+        await state.clear()
+        return
+    
+    if raw_text.lower() in {"off", "disable", "none", "0"}:
+        await db.set_stop_words(chat_id, [])
+        status_text = "Стоп-слова очищены."
+    else:
+        words = _parse_stop_words(raw_text)
+        if not words:
+            await message.answer("❌ Не найдено ни одного слова. Укажите через запятую или с новой строки.")
+            return
+        await db.set_stop_words(chat_id, words)
+        status_text = f"Стоп-слова обновлены ({len(set(words))} шт.)."
+    
+    is_group = await _is_group_chat(message.bot, chat_id)
+    await message.answer(
+        f"✅ {status_text}",
+        reply_markup=get_chat_settings_keyboard(chat_id, is_group=is_group)
+    )
     await state.clear()
 
 
@@ -382,10 +459,13 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
     if is_group:
         welcome_status = "✅ Настроено" if chat_data.get('welcome_message') else "⚪️ Нет"
         rules_status = "✅ Настроены" if chat_data.get('rules_message') else "⚪️ Нет"
+        stop_words = await db.get_stop_words(chat_id)
+        stop_words_status = f"{len(stop_words)} шт." if stop_words else "⚪️ Нет"
         text += (
             f"\n🤖 Капча: {captcha}"
             f"\n👋 Приветствие: {welcome_status}"
             f"\n📜 Правила /rules: {rules_status}"
+            f"\n🚫 Стоп-слова: {stop_words_status}"
         )
     
     await callback.message.edit_text(

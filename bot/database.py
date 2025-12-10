@@ -72,6 +72,13 @@ class Database:
             );
 
             CREATE INDEX IF NOT EXISTS idx_captcha_expires ON pending_captcha(expires_at);
+
+            CREATE TABLE IF NOT EXISTS stop_words (
+                chat_id INTEGER NOT NULL,
+                word TEXT NOT NULL,
+                PRIMARY KEY (chat_id, word),
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
         ''')
         await self._connection.commit()
 
@@ -297,6 +304,34 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return bool(row['captcha_enabled']) if row else False
+
+    # === STOP WORDS ===
+
+    async def get_stop_words(self, chat_id: int) -> List[str]:
+        """Получить список стоп-слов для чата"""
+        async with self._connection.execute(
+            'SELECT word FROM stop_words WHERE chat_id = ? ORDER BY word',
+            (chat_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [row['word'] for row in rows]
+
+    async def set_stop_words(self, chat_id: int, words: List[str]):
+        """Заменить список стоп-слов для чата"""
+        await self._connection.execute(
+            'DELETE FROM stop_words WHERE chat_id = ?',
+            (chat_id,)
+        )
+
+        normalized = [word.lower() for word in words if word.strip()]
+        unique_words = sorted(set(normalized))
+
+        if unique_words:
+            await self._connection.executemany(
+                'INSERT INTO stop_words (chat_id, word) VALUES (?, ?)',
+                [(chat_id, word) for word in unique_words]
+            )
+        await self._connection.commit()
 
 
 # Глобальный экземпляр
