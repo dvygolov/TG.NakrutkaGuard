@@ -279,7 +279,7 @@ async def process_rules_message(message: Message, state: FSMContext):
         await message.answer("❌ Отправьте текстовое сообщение.")
         return
     
-    text = message.text.strip()
+    plain_text = message.text.strip()
     data = await state.get_data()
     chat_id = data.get('chat_id')
     
