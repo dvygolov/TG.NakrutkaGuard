@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Callable, Awaitable, Any
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -9,6 +9,8 @@ from bot.config import ADMIN_IDS, DEFAULT_THRESHOLD, DEFAULT_TIME_WINDOW, DEFAUL
 import html
 
 router = Router()
+
+OFF_KEYWORDS = {"off", "disable", "none", "0"}
 
 
 async def _is_group_chat(bot, chat_id: int) -> bool:
@@ -44,6 +46,105 @@ def _format_current_text_block(current_text: Optional[str]) -> str:
         "🔹 <b>Текущее значение:</b>\n"
         f"{current_text}"
     )
+
+
+def _format_stop_words_block(words: List[str]) -> str:
+    if not words:
+        return "🔹 <b>Текущее значение:</b> <i>не заданы</i>"
+    preview = ", ".join(words)
+    return f"🔹 <b>Текущее значение:</b> {html.escape(preview)}"
+
+
+async def _start_text_setting_flow(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    chat_id: int,
+    title: str,
+    instructions: str,
+    current_block: str,
+):
+    await state.update_data(chat_id=chat_id)
+    await callback.message.edit_text(
+        f"{title}\n\n{instructions}\n\n{current_block}",
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
+    await callback.answer()
+
+
+async def _process_text_setting_input(
+    message: Message,
+    state: FSMContext,
+    *,
+    parse_value: Callable[[Message], Awaitable[Optional[Any]]],
+    save_value: Callable[[int, Optional[Any]], Awaitable[str]],
+    empty_text_error: str = "❌ Отправьте текстовое сообщение.",
+):
+    if not is_admin(message.from_user.id):
+        return
+    
+    if not message.text:
+        await message.answer(empty_text_error)
+        return
+    
+    plain_text = message.text.strip()
+    data = await state.get_data()
+    chat_id = data.get('chat_id')
+    
+    if not chat_id:
+        await message.answer("⚠️ Чат не найден. Попробуйте ещё раз.")
+        await state.clear()
+        return
+    
+    if plain_text.lower() in OFF_KEYWORDS:
+        status_text = await save_value(chat_id, None)
+    else:
+        value = await parse_value(message)
+        if value is None:
+            return
+        status_text = await save_value(chat_id, value)
+    
+    is_group = await _is_group_chat(message.bot, chat_id)
+    await message.answer(
+        f"✅ {status_text}",
+        reply_markup=get_chat_settings_keyboard(chat_id, is_group=is_group)
+    )
+    await state.clear()
+
+
+async def _parse_html_text(message: Message, *, limit: int, too_long_error: str) -> Optional[str]:
+    html_text_value = (message.html_text or message.text or "").strip()
+    if len(html_text_value) > limit:
+        await message.answer(too_long_error)
+        return None
+    return html_text_value
+
+
+async def _parse_stop_words_message(message: Message) -> Optional[List[str]]:
+    words = _parse_stop_words(message.text.strip())
+    if not words:
+        await message.answer("❌ Не найдено ни одного слова. Укажите через запятую или с новой строки.")
+        return None
+    return words
+
+
+async def _save_welcome_setting(chat_id: int, value: Optional[str]) -> str:
+    await db.update_chat_settings(chat_id, welcome_message=value)
+    return "Приветствие отключено." if value is None else "Приветствие сохранено."
+
+
+async def _save_rules_setting(chat_id: int, value: Optional[str]) -> str:
+    await db.update_chat_settings(chat_id, rules_message=value)
+    return "Правила отключены." if value is None else "Правила сохранены."
+
+
+async def _save_stop_words_setting(chat_id: int, value: Optional[List[str]]) -> str:
+    await db.set_stop_words(chat_id, value or [])
+    if not value:
+        return "Стоп-слова очищены."
+    unique_count = len(set(value))
+    return f"Стоп-слова обновлены ({unique_count} шт.)."
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -197,59 +298,33 @@ async def start_set_stopwords(callback: CallbackQuery, state: FSMContext):
         return
     
     chat_id = int(callback.data.split("_")[2])
-    await state.update_data(chat_id=chat_id)
     words = await db.get_stop_words(chat_id)
-    preview = ", ".join(words) if words else "<i>не заданы</i>"
     
-    await callback.message.edit_text(
-        "🚫 <b>Стоп-слова</b>\n\n"
-        "Отправьте список слов/фраз, каждое с новой строки (или через запятую).\n"
-        "Любое сообщение в чате, содержащее одно из слов (без учёта регистра), будет удалено.\n\n"
-        "Чтобы очистить список, отправьте <code>off</code>.\n\n"
-        f"🔹 <b>Текущее значение:</b> {preview}",
-        parse_mode="HTML",
-        disable_web_page_preview=True
+    await _start_text_setting_flow(
+        callback,
+        state,
+        chat_id=chat_id,
+        title="🚫 <b>Стоп-слова</b>",
+        instructions=(
+            "Отправьте список слов/фраз, каждое с новой строки (или через запятую).\n"
+            "Любое сообщение в чате, содержащее одно из слов (без учёта регистра), будет удалено.\n\n"
+            "Чтобы очистить список, отправьте <code>off</code>."
+        ),
+        current_block=_format_stop_words_block(words)
     )
     await state.set_state(StopWordsStates.waiting_for_words)
-    await callback.answer()
 
 
 @router.message(StopWordsStates.waiting_for_words)
 async def process_stop_words(message: Message, state: FSMContext):
     """Сохранить стоп-слова"""
-    if not is_admin(message.from_user.id):
-        return
-    
-    if not message.text:
-        await message.answer("❌ Отправьте список слов текстом.")
-        return
-    
-    raw_text = message.text.strip()
-    data = await state.get_data()
-    chat_id = data.get('chat_id')
-    
-    if not chat_id:
-        await message.answer("⚠️ Чат не найден. Попробуйте снова.")
-        await state.clear()
-        return
-    
-    if raw_text.lower() in {"off", "disable", "none", "0"}:
-        await db.set_stop_words(chat_id, [])
-        status_text = "Стоп-слова очищены."
-    else:
-        words = _parse_stop_words(raw_text)
-        if not words:
-            await message.answer("❌ Не найдено ни одного слова. Укажите через запятую или с новой строки.")
-            return
-        await db.set_stop_words(chat_id, words)
-        status_text = f"Стоп-слова обновлены ({len(set(words))} шт.)."
-    
-    is_group = await _is_group_chat(message.bot, chat_id)
-    await message.answer(
-        f"✅ {status_text}",
-        reply_markup=get_chat_settings_keyboard(chat_id, is_group=is_group)
+    await _process_text_setting_input(
+        message,
+        state,
+        parse_value=_parse_stop_words_message,
+        save_value=_save_stop_words_setting,
+        empty_text_error="❌ Отправьте список слов текстом."
     )
-    await state.clear()
 
 
 @router.callback_query(F.data.startswith("set_welcome_"))
@@ -260,63 +335,42 @@ async def start_set_welcome(callback: CallbackQuery, state: FSMContext):
         return
     
     chat_id = int(callback.data.split("_")[2])
-    await state.update_data(chat_id=chat_id)
     chat_data = await db.get_chat(chat_id)
     current_welcome = chat_data.get('welcome_message') if chat_data else None
     current_block = _format_current_text_block(current_welcome)
     
-    await callback.message.edit_text(
-        "👋 <b>Настройка приветственного сообщения</b>\n\n"
-        "Отправьте текст, который бот будет показывать после успешной капчи.\n"
-        "Сообщение автоматически удаляется через ~3 минуты.\n\n"
-        "Поддерживается <b>HTML-разметка</b> и плейсхолдер <code>{username}</code> для упоминания новенького.\n\n"
-        "Чтобы отключить приветствие, отправьте <code>off</code>.\n\n"
-        f"{current_block}",
-        parse_mode="HTML",
-        disable_web_page_preview=True
+    await _start_text_setting_flow(
+        callback,
+        state,
+        chat_id=chat_id,
+        title="👋 <b>Настройка приветственного сообщения</b>",
+        instructions=(
+            "Отправьте текст, который бот будет показывать после успешной капчи.\n"
+            "Сообщение автоматически удаляется через ~3 минуты.\n\n"
+            "Поддерживается <b>HTML-разметка</b> и плейсхолдер <code>{username}</code> для упоминания новенького.\n\n"
+            "Чтобы отключить приветствие, отправьте <code>off</code>."
+        ),
+        current_block=current_block
     )
     await state.set_state(TextSettingsStates.waiting_for_welcome)
-    await callback.answer()
 
 
 @router.message(TextSettingsStates.waiting_for_welcome)
 async def process_welcome_message(message: Message, state: FSMContext):
     """Сохранить новое приветствие"""
-    if not is_admin(message.from_user.id):
-        return
+    async def _parse(message: Message) -> Optional[str]:
+        return await _parse_html_text(
+            message,
+            limit=2000,
+            too_long_error="❌ Слишком длинное сообщение (лимит 1000 символов)."
+        )
     
-    if not message.text:
-        await message.answer("❌ Отправьте текстовое сообщение.")
-        return
-    
-    plain_text = message.text.strip()
-    data = await state.get_data()
-    chat_id = data.get('chat_id')
-    
-    if not chat_id:
-        await message.answer("⚠️ Чат не найден. Попробуйте ещё раз.")
-        await state.clear()
-        return
-    
-    if plain_text.lower() in {"off", "disable", "none", "0"}:
-        welcome_text = None
-        status_text = "Приветствие отключено."
-    else:
-        html_text_value = (message.html_text or message.text or "").strip()
-        if len(html_text_value) > 2000:
-            await message.answer("❌ Слишком длинное сообщение (лимит 1000 символов).")
-            return
-        welcome_text = html_text_value
-        status_text = "Приветствие сохранено."
-    
-    await db.update_chat_settings(chat_id, welcome_message=welcome_text)
-    
-    is_group = await _is_group_chat(message.bot, chat_id)
-    await message.answer(
-        f"✅ {status_text}",
-        reply_markup=get_chat_settings_keyboard(chat_id, is_group=is_group)
+    await _process_text_setting_input(
+        message,
+        state,
+        parse_value=_parse,
+        save_value=_save_welcome_setting
     )
-    await state.clear()
 
 
 @router.callback_query(F.data.startswith("set_rules_"))
@@ -327,63 +381,42 @@ async def start_set_rules(callback: CallbackQuery, state: FSMContext):
         return
     
     chat_id = int(callback.data.split("_")[2])
-    await state.update_data(chat_id=chat_id)
     chat_data = await db.get_chat(chat_id)
     current_rules = chat_data.get('rules_message') if chat_data else None
     current_block = _format_current_text_block(current_rules)
     
-    await callback.message.edit_text(
-        "📜 <b>Настройка правил (/rules)</b>\n\n"
-        "Отправьте текст правил. Пользователи смогут получить его командой <code>/rules</code>, "
-        "бот удалит сообщение через ~3 минуты.\n\n"
-        "Можно использовать <b>HTML-разметку</b> и ссылки.\n\n"
-        "Чтобы отключить правила, отправьте <code>off</code>.\n\n"
-        f"{current_block}",
-        parse_mode="HTML",
-        disable_web_page_preview=True
+    await _start_text_setting_flow(
+        callback,
+        state,
+        chat_id=chat_id,
+        title="📜 <b>Настройка правил (/rules)</b>",
+        instructions=(
+            "Отправьте текст правил. Пользователи смогут получить его командой <code>/rules</code>, "
+            "бот удалит сообщение через ~3 минуты.\n\n"
+            "Можно использовать <b>HTML-разметку</b> и ссылки.\n\n"
+            "Чтобы отключить правила, отправьте <code>off</code>."
+        ),
+        current_block=current_block
     )
     await state.set_state(TextSettingsStates.waiting_for_rules)
-    await callback.answer()
 
 
 @router.message(TextSettingsStates.waiting_for_rules)
 async def process_rules_message(message: Message, state: FSMContext):
     """Сохранить текст правил"""
-    if not is_admin(message.from_user.id):
-        return
+    async def _parse(message: Message) -> Optional[str]:
+        return await _parse_html_text(
+            message,
+            limit=4000,
+            too_long_error="❌ Слишком длинное сообщение (лимит 1500 символов)."
+        )
     
-    if not message.text:
-        await message.answer("❌ Отправьте текстовое сообщение.")
-        return
-    
-    plain_text = message.text.strip()
-    data = await state.get_data()
-    chat_id = data.get('chat_id')
-    
-    if not chat_id:
-        await message.answer("⚠️ Чат не найден. Попробуйте ещё раз.")
-        await state.clear()
-        return
-    
-    if plain_text.lower() in {"off", "disable", "none", "0"}:
-        rules_text = None
-        status_text = "Правила отключены."
-    else:
-        html_text_value = (message.html_text or message.text or "").strip()
-        if len(html_text_value) > 4000:
-            await message.answer("❌ Слишком длинное сообщение (лимит 1500 символов).")
-            return
-        rules_text = html_text_value
-        status_text = "Правила сохранены."
-    
-    await db.update_chat_settings(chat_id, rules_message=rules_text)
-    
-    is_group = await _is_group_chat(message.bot, chat_id)
-    await message.answer(
-        f"✅ {status_text}",
-        reply_markup=get_chat_settings_keyboard(chat_id, is_group=is_group)
+    await _process_text_setting_input(
+        message,
+        state,
+        parse_value=_parse,
+        save_value=_save_rules_setting
     )
-    await state.clear()
 
 
 @router.callback_query(F.data == "list_chats")

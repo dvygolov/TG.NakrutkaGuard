@@ -1,5 +1,6 @@
 import asyncio
-from aiogram import Router, F, Bot
+from typing import Optional, Union
+from aiogram import Router, Bot
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import ChatMemberUpdatedFilter, MEMBER, Command
 from bot.database import db
@@ -12,13 +13,7 @@ import html
 router = Router()
 
 
-def _is_not_command(message: Message) -> bool:
-    """True если сообщение не команда."""
-    text = message.text or message.caption or ""
-    return not text.startswith("/")
-
-
-def _format_welcome_text(template: str, user: Message | CallbackQuery) -> str:
+def _format_welcome_text(template: str, user: Union[Message, CallbackQuery]) -> str:
     """Подставляет макросы в приветственном сообщении."""
     user_obj = user.from_user if hasattr(user, "from_user") else None
     if not user_obj:
@@ -37,8 +32,8 @@ async def send_captcha(
     bot: Bot,
     chat_id: int,
     user_id: int,
-    username: str = None,
-    full_name: str = None,
+    username: Optional[str] = None,
+    full_name: Optional[str] = None,
 ):
     """
     Отправить капчу пользователю
@@ -233,58 +228,6 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
             print(f"[CAPTCHA] Ошибка кика user={user_id} за неправильный ответ: {e}")
 
 
-@router.message(_is_not_command, F.chat.type.in_({"group", "supergroup"}))
-async def handle_group_messages(message: Message, bot: Bot):
-    """Обработка сообщений в группах"""
-    chat_id = message.chat.id
-    
-    # Проверяем защищён ли чат
-    chat_data = await db.get_chat(chat_id)
-    if not chat_data:
-        # Чат не под защитой - ничего не делаем
-        return
-    
-    # 1. Удаляем системные сообщения (join/left/kicked)
-    if message.new_chat_members or message.left_chat_member:
-        print(f"[SYSTEM] Удаляю системное сообщение в chat={chat_id}, message_id={message.message_id}")
-        try:
-            await bot.delete_message(chat_id, message.message_id)
-            print(f"[SYSTEM] Системное сообщение удалено")
-        except Exception as e:
-            print(f"[SYSTEM] Не удалось удалить системное сообщение: {e}")
-        return
-    
-    # 2. Удаляем сообщения от юзеров которые не прошли капчу
-    if message.from_user:
-        user_id = message.from_user.id
-        pending = await db.get_pending_captcha(chat_id, user_id)
-        
-        if pending:
-            print(f"[CAPTCHA] User={user_id} написал сообщение но не прошёл капчу, удаляю...")
-            try:
-                await bot.delete_message(chat_id, message.message_id)
-                print(f"[CAPTCHA] Сообщение от user={user_id} удалено")
-            except Exception as e:
-                print(f"[CAPTCHA] Ошибка удаления сообщения от pending user {user_id}: {e}")
-            return
-
-    # 3. Стоп-слова
-    stop_words = await db.get_stop_words(chat_id)
-    if stop_words:
-        content_parts = [
-            message.text,
-            message.caption,
-        ]
-        text_content = " ".join(filter(None, content_parts)).lower()
-        if text_content:
-            for word in stop_words:
-                if word in text_content:
-                    print(f"[STOP_WORD] Удаляю сообщение {message.message_id} из chat={chat_id} за слово '{word}'")
-                    try:
-                        await bot.delete_message(chat_id, message.message_id)
-                    except Exception as e:
-                        print(f"[STOP_WORD] Не удалось удалить message_id={message.message_id}: {e}")
-                    break
 
 
 @router.message(Command("rules"))
