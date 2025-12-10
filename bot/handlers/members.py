@@ -68,7 +68,13 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     # 4. Юзер не бот (ботов сразу кикаем)
     if is_group and captcha_enabled and not protection_active and not user.is_bot:
         # Отправляем капчу
-        await send_captcha(bot, chat.id, user.id, user.username)
+        await send_captcha(
+            bot,
+            chat.id,
+            user.id,
+            username=user.username,
+            full_name=user.full_name,
+        )
         # Больше ничего не делаем - ждём прохождения капчи
         return
     

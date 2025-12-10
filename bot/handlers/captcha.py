@@ -35,7 +35,13 @@ def _format_welcome_text(template: str, user: Message | CallbackQuery) -> str:
     return template.replace("{username}", mention)
 
 
-async def send_captcha(bot: Bot, chat_id: int, user_id: int, username: str = None):
+async def send_captcha(
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    username: str | None = None,
+    full_name: str | None = None,
+):
     """
     Отправить капчу пользователю
     
@@ -53,7 +59,7 @@ async def send_captcha(bot: Bot, chat_id: int, user_id: int, username: str = Non
         if username:
             user_mention = f"@{username}"
         else:
-            fallback_name = f"ID: {user_id}"
+            fallback_name = full_name or f"ID: {user_id}"
             user_mention = f'<a href="tg://user?id={user_id}">{html.escape(fallback_name)}</a>'
         text = (
             f"{user_mention}, чтобы вступить, пройдите проверку.\n\n"
