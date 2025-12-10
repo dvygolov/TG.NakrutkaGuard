@@ -1,6 +1,6 @@
 import asyncio
 from typing import Optional, Union
-from aiogram import Router, Bot
+from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import ChatMemberUpdatedFilter, MEMBER, Command
 from bot.database import db
