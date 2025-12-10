@@ -38,6 +38,12 @@ async def handle_group_messages(message: Message, bot: Bot):
     # 1.5. Проверка сообщений от каналов (если запрещено)
     allow_channel_posts = chat_data.get('allow_channel_posts', True)
     linked_channel_id = getattr(message.chat, "linked_chat_id", None)
+    if linked_channel_id is None:
+        try:
+            chat_info = await bot.get_chat(chat_id)
+            linked_channel_id = getattr(chat_info, "linked_chat_id", None)
+        except Exception as e:
+            print(f"[CHANNEL] Не удалось получить linked_chat_id для chat={chat_id}: {e}")
     sender_chat = message.sender_chat
     is_channel_post = sender_chat and sender_chat.type == "channel"
 
