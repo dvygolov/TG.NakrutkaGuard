@@ -37,7 +37,15 @@ async def handle_group_messages(message: Message, bot: Bot):
 
     # 1.5. Проверка сообщений от каналов (если запрещено)
     allow_channel_posts = chat_data.get('allow_channel_posts', True)
-    if not allow_channel_posts and message.sender_chat and not message.from_user:
+    linked_channel_id = getattr(message.chat, "linked_chat_id", None)
+    sender_chat = message.sender_chat
+    is_channel_post = sender_chat and sender_chat.type == "channel"
+
+    if (
+        not allow_channel_posts
+        and is_channel_post
+        and (not linked_channel_id or sender_chat.id != linked_channel_id)
+    ):
         try:
             await bot.delete_message(chat_id, message.message_id)
         except Exception as e:
