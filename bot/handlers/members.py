@@ -59,15 +59,15 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     if result['reason'] == 'chat_not_protected':
         return
     
-    # === СКОРИНГ И КАПЧА (только для групп в обычном режиме) ===
+    # === СКОРИНГ И КАПЧА ===
     chat_data = await db.get_chat(chat.id)
     is_group = chat.type in ["group", "supergroup"]
     captcha_enabled = chat_data and chat_data.get('captcha_enabled', False)
     protection_active = chat_data and chat_data.get('protection_active', False)
     scoring_enabled = chat_data and chat_data.get('scoring_enabled', False)
     
-    # Скоринг работает только в обычном режиме (не в атаке) для групп
-    if is_group and scoring_enabled and not protection_active and not user.is_bot:
+    # Скоринг работает только в обычном режиме (не в атаке)
+    if scoring_enabled and not protection_active and not user.is_bot:
         try:
             # Получаем конфиг скоринга
             scoring_config_data = await db.get_scoring_config(chat.id)

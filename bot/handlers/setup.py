@@ -164,11 +164,11 @@ def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKey
             InlineKeyboardButton(text="⏱ Изменить окно", callback_data=f"set_window_{chat_id}")
         ],
         [InlineKeyboardButton(text="👑 Premium защита", callback_data=f"toggle_premium_{chat_id}")],
+        [InlineKeyboardButton(text="🎯 Скоринг", callback_data=f"toggle_scoring_{chat_id}")],
     ]
     
-    # Капча и скоринг только для групп (не для каналов)
+    # Капча и другие функции только для групп (не для каналов)
     if is_group:
-        buttons.append([InlineKeyboardButton(text="🎯 Скоринг", callback_data=f"toggle_scoring_{chat_id}")])
         buttons.append([InlineKeyboardButton(text="🤖 Капча для вступающих", callback_data=f"toggle_captcha_{chat_id}")])
         buttons.append([
             InlineKeyboardButton(text="👋 Приветствие", callback_data=f"set_welcome_{chat_id}"),
@@ -483,6 +483,10 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
     captcha = "✅ Да" if chat_data.get('captcha_enabled', False) else "❌ Нет"
     
     # Формируем текст
+    scoring_enabled = chat_data.get('scoring_enabled', False)
+    scoring_threshold = chat_data.get('scoring_threshold', 50)
+    scoring = f"✅ Да, порог {scoring_threshold}" if scoring_enabled else "❌ Нет"
+    
     text = (
         f"⚙️ <b>Настройки чата</b>\n\n"
         f"📝 Название: {chat_data['title']}\n"
@@ -490,21 +494,18 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
         f"👤 Username: @{chat_data['username'] or 'нет'}\n\n"
         f"🛡 Режим защиты: {status}\n"
         f"📊 Порог: {chat_data['threshold']} юзеров/{chat_data['time_window']} секунд\n"
-        f"👑 Защита Premium: {premium}"
+        f"👑 Защита Premium: {premium}\n"
+        f"🎯 Скоринг: {scoring}"
     )
     
-    # Добавляем капчу, скоринг и другие настройки только для групп
+    # Добавляем настройки только для групп (капча, приветствия и т.д.)
     if is_group:
-        scoring_enabled = chat_data.get('scoring_enabled', False)
-        scoring_threshold = chat_data.get('scoring_threshold', 50)
-        scoring = f"✅ Да, порог {scoring_threshold}" if scoring_enabled else "❌ Нет"
         welcome_status = "✅ Настроено" if chat_data.get('welcome_message') else "⚪️ Нет"
         rules_status = "✅ Настроены" if chat_data.get('rules_message') else "⚪️ Нет"
         stop_words = await db.get_stop_words(chat_id)
         stop_words_status = f"{len(stop_words)} шт." if stop_words else "⚪️ Нет"
         channel_posts_status = "✅ Разрешены" if chat_data.get('allow_channel_posts', True) else "🚫 Запрещены"
         text += (
-            f"\n🎯 Скоринг: {scoring}"
             f"\n🤖 Капча: {captcha}"
             f"\n👋 Приветствие: {welcome_status}"
             f"\n📜 Правила /rules: {rules_status}"

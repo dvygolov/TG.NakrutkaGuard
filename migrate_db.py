@@ -1,8 +1,12 @@
 """
-Миграция БД для добавления капчи
+Миграция БД для всех функций бота
 Добавляет:
-- captcha_enabled в таблицу chats
-- таблицу pending_captcha
+- Поля для капчи (captcha_enabled, welcome_message, rules_message, allow_channel_posts)
+- Таблицу pending_captcha
+- Поля для скоринга (scoring_enabled, scoring_threshold, scoring_lang_distribution)
+- Таблицу good_users
+
+Запуск: python migrate_db.py
 """
 import asyncio
 import aiosqlite
@@ -12,7 +16,7 @@ DB_PATH = Path(__file__).parent / 'data' / 'bot.db'
 
 
 async def migrate():
-    print(f"Миграция БД: {DB_PATH}")
+    print(f"🔄 Миграция БД: {DB_PATH}")
     
     if not DB_PATH.exists():
         print("❌ БД не найдена!")
@@ -21,49 +25,72 @@ async def migrate():
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         
-        # 1. Проверяем есть ли captcha_enabled
+        # Получаем список существующих полей в таблице chats
         cursor = await db.execute("PRAGMA table_info(chats)")
         columns = await cursor.fetchall()
         column_names = [col['name'] for col in columns]
         
+        print("\n📋 Проверка и добавление полей в таблицу chats...")
+        
+        # === КАПЧА ===
         if 'captcha_enabled' not in column_names:
-            print("➕ Добавляем captcha_enabled в chats...")
+            print("➕ Добавляем captcha_enabled...")
             await db.execute('ALTER TABLE chats ADD COLUMN captcha_enabled BOOLEAN DEFAULT 0')
             print("✅ captcha_enabled добавлен")
         else:
             print("✓ captcha_enabled уже есть")
         
-        # 2. Добавляем welcome_message
         if 'welcome_message' not in column_names:
-            print("➕ Добавляем welcome_message в chats...")
+            print("➕ Добавляем welcome_message...")
             await db.execute('ALTER TABLE chats ADD COLUMN welcome_message TEXT')
             print("✅ welcome_message добавлен")
         else:
             print("✓ welcome_message уже есть")
 
-        # 3. Добавляем rules_message
         if 'rules_message' not in column_names:
-            print("➕ Добавляем rules_message в chats...")
+            print("➕ Добавляем rules_message...")
             await db.execute('ALTER TABLE chats ADD COLUMN rules_message TEXT')
             print("✅ rules_message добавлен")
         else:
             print("✓ rules_message уже есть")
 
-        # 4. Добавляем allow_channel_posts
         if 'allow_channel_posts' not in column_names:
-            print("➕ Добавляем allow_channel_posts в chats...")
+            print("➕ Добавляем allow_channel_posts...")
             await db.execute('ALTER TABLE chats ADD COLUMN allow_channel_posts BOOLEAN DEFAULT 1')
             print("✅ allow_channel_posts добавлен")
         else:
             print("✓ allow_channel_posts уже есть")
 
-        # 5. Проверяем есть ли таблица pending_captcha
+        # === СКОРИНГ ===
+        if 'scoring_enabled' not in column_names:
+            print("➕ Добавляем scoring_enabled...")
+            await db.execute('ALTER TABLE chats ADD COLUMN scoring_enabled BOOLEAN DEFAULT 0')
+            print("✅ scoring_enabled добавлен")
+        else:
+            print("✓ scoring_enabled уже есть")
+        
+        if 'scoring_threshold' not in column_names:
+            print("➕ Добавляем scoring_threshold...")
+            await db.execute('ALTER TABLE chats ADD COLUMN scoring_threshold INTEGER DEFAULT 50')
+            print("✅ scoring_threshold добавлен")
+        else:
+            print("✓ scoring_threshold уже есть")
+        
+        if 'scoring_lang_distribution' not in column_names:
+            print("➕ Добавляем scoring_lang_distribution...")
+            await db.execute('ALTER TABLE chats ADD COLUMN scoring_lang_distribution TEXT DEFAULT \'{"ru": 0.8, "en": 0.2}\'')
+            print("✅ scoring_lang_distribution добавлен")
+        else:
+            print("✓ scoring_lang_distribution уже есть")
+
+        # === ТАБЛИЦЫ ===
+        print("\n📋 Проверка и создание таблиц...")
+        
+        # Таблица pending_captcha
         cursor = await db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_captcha'"
         )
-        table_exists = await cursor.fetchone()
-        
-        if not table_exists:
+        if not await cursor.fetchone():
             print("➕ Создаём таблицу pending_captcha...")
             await db.execute('''
                 CREATE TABLE pending_captcha (
@@ -78,14 +105,42 @@ async def migrate():
                 )
             ''')
             await db.execute(
-                'CREATE INDEX idx_captcha_expires ON pending_captcha(expires_at)'
+                'CREATE INDEX IF NOT EXISTS idx_captcha_expires ON pending_captcha(expires_at)'
             )
             print("✅ Таблица pending_captcha создана")
         else:
             print("✓ Таблица pending_captcha уже есть")
         
+        # Таблица good_users
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='good_users'"
+        )
+        if not await cursor.fetchone():
+            print("➕ Создаём таблицу good_users...")
+            await db.execute('''
+                CREATE TABLE good_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    username TEXT,
+                    language_code TEXT,
+                    is_premium BOOLEAN DEFAULT 0,
+                    verified_at INTEGER NOT NULL,
+                    FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+                )
+            ''')
+            await db.execute(
+                'CREATE INDEX IF NOT EXISTS idx_good_users_chat ON good_users(chat_id, verified_at)'
+            )
+            await db.execute(
+                'CREATE INDEX IF NOT EXISTS idx_good_users_lookup ON good_users(chat_id, user_id)'
+            )
+            print("✅ Таблица good_users создана")
+        else:
+            print("✓ Таблица good_users уже есть")
+        
         await db.commit()
-        print("\n✅ Миграция завершена!")
+        print("\n✅ Миграция успешно завершена!")
 
 
 if __name__ == '__main__':
