@@ -159,15 +159,16 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
 def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKeyboardMarkup:
     """Клавиатура настроек конкретного чата"""
     buttons = [
-        [InlineKeyboardButton(text="⚙️ Изменить порог", callback_data=f"set_threshold_{chat_id}")],
-        [InlineKeyboardButton(text="⏱ Изменить окно", callback_data=f"set_window_{chat_id}")],
+        [
+            InlineKeyboardButton(text="⚙️ Изменить порог", callback_data=f"set_threshold_{chat_id}"),
+            InlineKeyboardButton(text="⏱ Изменить окно", callback_data=f"set_window_{chat_id}")
+        ],
         [InlineKeyboardButton(text="👑 Premium защита", callback_data=f"toggle_premium_{chat_id}")],
     ]
     
     # Капча и скоринг только для групп (не для каналов)
     if is_group:
         buttons.append([InlineKeyboardButton(text="🎯 Скоринг", callback_data=f"toggle_scoring_{chat_id}")])
-        buttons.append([InlineKeyboardButton(text="🎯 Порог скоринга", callback_data=f"set_scoring_threshold_{chat_id}")])
         buttons.append([InlineKeyboardButton(text="🤖 Капча для вступающих", callback_data=f"toggle_captcha_{chat_id}")])
         buttons.append([
             InlineKeyboardButton(text="👋 Приветствие", callback_data=f"set_welcome_{chat_id}"),
@@ -488,15 +489,15 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
         f"🆔 ID: <code>{chat_id}</code>\n"
         f"👤 Username: @{chat_data['username'] or 'нет'}\n\n"
         f"🛡 Режим защиты: {status}\n"
-        f"📊 Порог: {chat_data['threshold']} вступлений\n"
-        f"⏱ Временное окно: {chat_data['time_window']} секунд\n"
+        f"📊 Порог: {chat_data['threshold']} юзеров/{chat_data['time_window']} секунд\n"
         f"👑 Защита Premium: {premium}"
     )
     
     # Добавляем капчу, скоринг и другие настройки только для групп
     if is_group:
-        scoring = "✅ Да" if chat_data.get('scoring_enabled', False) else "❌ Нет"
+        scoring_enabled = chat_data.get('scoring_enabled', False)
         scoring_threshold = chat_data.get('scoring_threshold', 50)
+        scoring = f"✅ Да, порог {scoring_threshold}" if scoring_enabled else "❌ Нет"
         welcome_status = "✅ Настроено" if chat_data.get('welcome_message') else "⚪️ Нет"
         rules_status = "✅ Настроены" if chat_data.get('rules_message') else "⚪️ Нет"
         stop_words = await db.get_stop_words(chat_id)
@@ -504,7 +505,6 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
         channel_posts_status = "✅ Разрешены" if chat_data.get('allow_channel_posts', True) else "🚫 Запрещены"
         text += (
             f"\n🎯 Скоринг: {scoring}"
-            f"\n🎯 Порог скоринга: {scoring_threshold}"
             f"\n🤖 Капча: {captcha}"
             f"\n👋 Приветствие: {welcome_status}"
             f"\n📜 Правила /rules: {rules_status}"
@@ -544,19 +544,30 @@ async def toggle_premium_protection(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("toggle_scoring_"))
-async def toggle_scoring(callback: CallbackQuery):
+async def toggle_scoring(callback: CallbackQuery, state: FSMContext):
     """Переключить скоринг"""
     chat_id = int(callback.data.split("_")[2])
     chat_data = await db.get_chat(chat_id)
     
     new_value = not chat_data.get('scoring_enabled', False)
-    await db.update_chat_settings(chat_id, scoring_enabled=new_value)
     
-    await callback.answer(
-        f"✅ Скоринг: {'Включен' if new_value else 'Выключен'}",
-        show_alert=True
-    )
-    await _show_chat_settings_message(callback, chat_id)
+    if new_value:
+        # Включаем - запрашиваем порог
+        await state.update_data(chat_id=chat_id)
+        await callback.message.edit_text(
+            "🎯 <b>Включение скоринга</b>\n\n"
+            "Отправьте порог скоринга (0-100):\n"
+            "Юзеры со score > порога будут кикнуты.\n\n"
+            "Например: 50 (рекомендуется)",
+            parse_mode="HTML"
+        )
+        await state.set_state(ChangeSettingsStates.waiting_for_scoring_threshold)
+        await callback.answer()
+    else:
+        # Выключаем - просто выключаем
+        await db.update_chat_settings(chat_id, scoring_enabled=False)
+        await callback.answer("✅ Скоринг выключен", show_alert=True)
+        await _show_chat_settings_message(callback, chat_id)
 
 
 @router.callback_query(F.data.startswith("toggle_captcha_"))
@@ -694,23 +705,6 @@ async def process_window(message: Message, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data.startswith("set_scoring_threshold_"))
-async def start_set_scoring_threshold(callback: CallbackQuery, state: FSMContext):
-    """Начать изменение порога скоринга"""
-    chat_id = int(callback.data.split("_")[3])
-    await state.update_data(chat_id=chat_id)
-    
-    await callback.message.edit_text(
-        "🎯 <b>Изменение порога скоринга</b>\n\n"
-        "Отправьте новое значение (0-100):\n"
-        "Юзеры со score > порога будут кикнуты.\n\n"
-        "Например: 50 (дефолт)",
-        parse_mode="HTML"
-    )
-    await state.set_state(ChangeSettingsStates.waiting_for_scoring_threshold)
-    await callback.answer()
-
-
 @router.message(ChangeSettingsStates.waiting_for_scoring_threshold)
 async def process_scoring_threshold(message: Message, state: FSMContext):
     """Обработать новый порог скоринга"""
@@ -729,9 +723,10 @@ async def process_scoring_threshold(message: Message, state: FSMContext):
     data = await state.get_data()
     chat_id = data['chat_id']
     
-    await db.update_chat_settings(chat_id, scoring_threshold=threshold)
+    # Обновляем порог и включаем скоринг
+    await db.update_chat_settings(chat_id, scoring_threshold=threshold, scoring_enabled=True)
     await message.answer(
-        f"✅ Порог скоринга обновлён: {threshold}",
+        f"✅ Скоринг включен с порогом {threshold}",
         reply_markup=get_chat_settings_keyboard(chat_id)
     )
     
