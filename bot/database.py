@@ -1,5 +1,6 @@
 import aiosqlite
 import time
+import json
 from typing import Optional, List, Dict, Any
 from bot.config import DB_PATH
 
@@ -35,7 +36,10 @@ class Database:
                 captcha_enabled BOOLEAN DEFAULT 0,
                 welcome_message TEXT,
                 rules_message TEXT,
-                added_at INTEGER NOT NULL
+                added_at INTEGER NOT NULL,
+                scoring_enabled BOOLEAN DEFAULT 0,
+                scoring_threshold INTEGER DEFAULT 50,
+                scoring_lang_distribution TEXT DEFAULT '{"ru": 0.8, "en": 0.2}'
             );
 
             CREATE TABLE IF NOT EXISTS join_events (
@@ -80,6 +84,20 @@ class Database:
                 PRIMARY KEY (chat_id, word),
                 FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
             );
+
+            CREATE TABLE IF NOT EXISTS good_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                language_code TEXT,
+                is_premium BOOLEAN DEFAULT 0,
+                verified_at INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_good_users_chat ON good_users(chat_id, verified_at);
+            CREATE INDEX IF NOT EXISTS idx_good_users_lookup ON good_users(chat_id, user_id);
         ''')
         await self._connection.commit()
 
@@ -333,6 +351,86 @@ class Database:
                 [(chat_id, word) for word in unique_words]
             )
         await self._connection.commit()
+
+    # === SCORING ===
+
+    async def is_scoring_enabled(self, chat_id: int) -> bool:
+        """Проверить включен ли скоринг для чата"""
+        async with self._connection.execute(
+            'SELECT scoring_enabled FROM chats WHERE chat_id = ?', (chat_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row['scoring_enabled']) if row else False
+
+    async def get_scoring_config(self, chat_id: int) -> Optional[Dict[str, Any]]:
+        """Получить конфигурацию скоринга для чата"""
+        async with self._connection.execute(
+            'SELECT scoring_threshold, scoring_lang_distribution FROM chats WHERE chat_id = ?',
+            (chat_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return {
+                'threshold': row['scoring_threshold'],
+                'lang_distribution': json.loads(row['scoring_lang_distribution'])
+            }
+
+    async def add_good_user(self, chat_id: int, user_id: int, username: Optional[str],
+                           language_code: Optional[str], is_premium: bool):
+        """Добавить пользователя в список прошедших верификацию (для статистики)"""
+        await self._connection.execute('''
+            INSERT INTO good_users (chat_id, user_id, username, language_code, is_premium, verified_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (chat_id, user_id, username, language_code, is_premium, int(time.time())))
+        await self._connection.commit()
+
+    async def get_scoring_stats(self, chat_id: int, days: int = 7) -> Dict[str, Any]:
+        """Получить статистику для скоринга за последние N дней"""
+        cutoff_time = int(time.time()) - (days * 24 * 60 * 60)
+        
+        # Подсчёт языков
+        async with self._connection.execute('''
+            SELECT language_code, COUNT(*) as count FROM good_users
+            WHERE chat_id = ? AND verified_at >= ? AND language_code IS NOT NULL
+            GROUP BY language_code
+        ''', (chat_id, cutoff_time)) as cursor:
+            lang_rows = await cursor.fetchall()
+            lang_counts = {row['language_code']: row['count'] for row in lang_rows}
+        
+        # Общее количество
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM good_users
+            WHERE chat_id = ? AND verified_at >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            total = row['count'] if row else 0
+        
+        # Перцентили ID
+        async with self._connection.execute('''
+            SELECT user_id FROM good_users
+            WHERE chat_id = ? AND verified_at >= ?
+            ORDER BY user_id
+        ''', (chat_id, cutoff_time)) as cursor:
+            user_ids = [row['user_id'] for row in await cursor.fetchall()]
+        
+        p95_id = None
+        p99_id = None
+        if user_ids:
+            count = len(user_ids)
+            p95_idx = int(count * 0.95)
+            p99_idx = int(count * 0.99)
+            if p95_idx < count:
+                p95_id = user_ids[p95_idx]
+            if p99_idx < count:
+                p99_id = user_ids[p99_idx]
+        
+        return {
+            'lang_counts': lang_counts,
+            'total_good_joins': total,
+            'p95_id': p95_id,
+            'p99_id': p99_id
+        }
 
 
 # Глобальный экземпляр

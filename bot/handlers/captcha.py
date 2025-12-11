@@ -187,6 +187,17 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
         await db.remove_pending_captcha(chat_id, user_id)
         print(f"[CAPTCHA] User={user_id} удалён из pending")
 
+        # Добавляем в good_users для статистики скоринга
+        try:
+            user = callback.from_user
+            await db.add_good_user(
+                chat_id, user.id, user.username,
+                user.language_code, user.is_premium or False
+            )
+            print(f"[CAPTCHA] User={user_id} добавлен в good_users для статистики")
+        except Exception as e:
+            print(f"[CAPTCHA] Не удалось добавить в good_users: {e}")
+
         # Приветственное сообщение
         chat_data = await db.get_chat(chat_id)
         welcome_text = chat_data.get('welcome_message') if chat_data else None

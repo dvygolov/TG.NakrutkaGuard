@@ -3,10 +3,14 @@ from aiogram.types import ChatMemberUpdated
 from aiogram.filters import ChatMemberUpdatedFilter, MEMBER, KICKED, LEFT
 from bot.utils.detector import detector
 from bot.utils.logger import chat_logger
+from bot.utils.scoring import score_user, ScoringConfig, ScoringStats
 from bot.database import db
 from bot.config import ADMIN_IDS
 from bot.handlers.captcha import send_captcha
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = Router()
 
@@ -55,17 +59,75 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     if result['reason'] == 'chat_not_protected':
         return
     
-    # === КАПЧА (только для групп в обычном режиме) ===
+    # === СКОРИНГ И КАПЧА (только для групп в обычном режиме) ===
     chat_data = await db.get_chat(chat.id)
     is_group = chat.type in ["group", "supergroup"]
     captcha_enabled = chat_data and chat_data.get('captcha_enabled', False)
     protection_active = chat_data and chat_data.get('protection_active', False)
+    scoring_enabled = chat_data and chat_data.get('scoring_enabled', False)
+    
+    # Скоринг работает только в обычном режиме (не в атаке) для групп
+    if is_group and scoring_enabled and not protection_active and not user.is_bot:
+        try:
+            # Получаем конфиг скоринга
+            scoring_config_data = await db.get_scoring_config(chat.id)
+            if scoring_config_data:
+                # Получаем количество аватаров
+                photo_count = 0
+                try:
+                    photos = await bot.get_user_profile_photos(user.id, limit=100)
+                    photo_count = photos.total_count
+                except Exception as e:
+                    logger.warning(f"Не удалось получить фото профиля для {user.id}: {e}")
+                
+                # Получаем статистику
+                stats_data = await db.get_scoring_stats(chat.id, days=7)
+                
+                # Создаём конфиг и статистику
+                cfg = ScoringConfig(
+                    lang_distribution=scoring_config_data['lang_distribution']
+                )
+                stats = ScoringStats(
+                    lang_counts=stats_data['lang_counts'],
+                    total_good_joins=stats_data['total_good_joins'],
+                    p95_id=stats_data['p95_id'],
+                    p99_id=stats_data['p99_id']
+                )
+                
+                # Вычисляем скор
+                risk_score = score_user(user, photo_count=photo_count, cfg=cfg, stats=stats)
+                
+                # Если скор превышает порог - кикаем
+                if risk_score > scoring_config_data['threshold']:
+                    success = await kick_user_safe(bot, chat.id, user.id)
+                    if success:
+                        chat_logger.log_kick(
+                            chat.id, chat.username, user.id,
+                            user.username, f"scoring_{risk_score}"
+                        )
+                        await db.update_action_taken(chat.id, user.id, f"kicked_scoring_{risk_score}")
+                    logger.info(
+                        f"Юзер {user.id} кикнут по скорингу: score={risk_score} > threshold={scoring_config_data['threshold']}"
+                    )
+                    return
+                else:
+                    # Скор прошёл - добавляем в good_users для статистики
+                    await db.add_good_user(
+                        chat.id, user.id, user.username,
+                        user.language_code, user.is_premium or False
+                    )
+                    logger.info(
+                        f"Юзер {user.id} прошёл скоринг: score={risk_score} <= threshold={scoring_config_data['threshold']}"
+                    )
+        except Exception as e:
+            logger.error(f"Ошибка скоринга для {user.id}: {e}", exc_info=True)
     
     # Показываем капчу если:
     # 1. Это группа (не канал)
     # 2. Капча включена
     # 3. НЕ режим атаки
     # 4. Юзер не бот (ботов сразу кикаем)
+    # 5. Юзер прошёл скоринг (или скоринг выключен)
     if is_group and captcha_enabled and not protection_active and not user.is_bot:
         # Отправляем капчу
         await send_captcha(
