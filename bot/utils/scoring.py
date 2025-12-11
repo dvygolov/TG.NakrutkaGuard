@@ -50,6 +50,10 @@ NAME_HAS_LAT_CYR_RE = re.compile(r"[A-Za-zА-Яа-я]")  # проверка ФИ
 NAME_HAS_ARABIC_RE = re.compile(r"[\u0600-\u06FF]")  # арабские символы
 NAME_HAS_CJK_RE = re.compile(r"[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]")  # китайские/японские/корейские
 
+# Экспортируем для использования в других модулях (например, для логирования failed captcha)
+LATIN_CYRILLIC_REGEX = NAME_HAS_LAT_CYR_RE
+ARABIC_CJK_REGEX = re.compile(r"[\u0600-\u06FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]")  # арабские + CJK
+
 
 def _normalize_lang(lang: Optional[str]) -> Optional[str]:
     if not lang:

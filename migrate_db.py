@@ -86,6 +86,22 @@ async def migrate():
             print("✅ scoring_lang_distribution добавлен")
         else:
             print("✓ scoring_lang_distribution уже есть")
+        
+        # === ВЕСА СКОРИНГА (для автообучения) - JSON формат ===
+        if 'scoring_weights' not in column_names:
+            print("➕ Добавляем scoring_weights (JSON)...")
+            await db.execute('''ALTER TABLE chats ADD COLUMN scoring_weights TEXT 
+                DEFAULT '{"max_lang_risk": 30, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}' ''')
+            print("✅ scoring_weights добавлен")
+        else:
+            print("✓ scoring_weights уже есть")
+        
+        if 'scoring_auto_adjust' not in column_names:
+            print("➕ Добавляем scoring_auto_adjust...")
+            await db.execute('ALTER TABLE chats ADD COLUMN scoring_auto_adjust BOOLEAN DEFAULT 1')
+            print("✅ scoring_auto_adjust добавлен")
+        else:
+            print("✓ scoring_auto_adjust уже есть")
 
         # === ТАБЛИЦЫ ===
         print("\n📋 Проверка и создание таблиц...")
@@ -142,6 +158,35 @@ async def migrate():
             print("✅ Таблица good_users создана")
         else:
             print("✓ Таблица good_users уже есть")
+        
+        # Таблица failed_captcha_features (для автообучения скоринга)
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='failed_captcha_features'"
+        )
+        if not await cursor.fetchone():
+            print("➕ Создаём таблицу failed_captcha_features...")
+            await db.execute('''
+                CREATE TABLE failed_captcha_features (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    language_code TEXT,
+                    has_username BOOLEAN,
+                    photo_count INTEGER,
+                    name_has_latin_cyrillic BOOLEAN,
+                    name_has_arabic_cjk BOOLEAN,
+                    is_premium BOOLEAN,
+                    scoring_score INTEGER,
+                    failed_at INTEGER NOT NULL,
+                    FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+                )
+            ''')
+            await db.execute(
+                'CREATE INDEX IF NOT EXISTS idx_failed_captcha_chat ON failed_captcha_features(chat_id, failed_at)'
+            )
+            print("✅ Таблица failed_captcha_features создана")
+        else:
+            print("✓ Таблица failed_captcha_features уже есть")
         
         # === ОЧИСТКА УСТАРЕВШИХ ТАБЛИЦ ===
         print("\n🗑 Проверка устаревших таблиц...")

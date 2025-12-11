@@ -1,0 +1,164 @@
+"""
+Автоматическая корректировка весов скоринга на основе провалов капчи.
+"""
+import logging
+from typing import Dict, Any, Optional
+from bot.database import db
+
+logger = logging.getLogger(__name__)
+
+
+async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Автоматически корректировать веса скоринга на основе статистики провалов капчи.
+    
+    Алгоритм:
+    1. Собираем статистику за последние 7 дней (минимум 30 провалов)
+    2. Если какой-то признак встречается у 70%+ неудачников -> увеличиваем штраф
+    3. Если средний скор неудачников < порог-10 -> повышаем порог или веса
+    
+    Args:
+        chat_id: ID чата
+    
+    Returns:
+        Dict с изменениями или None если корректировка не нужна
+    """
+    # Проверяем включена ли автокорректировка
+    config = await db.get_scoring_config(chat_id)
+    if not config or not config.get('auto_adjust', True):
+        return None
+    
+    # Получаем статистику провалов (минимум 30 примеров)
+    failed_stats = await db.get_failed_captcha_stats(chat_id, days=7, min_samples=30)
+    if not failed_stats:
+        logger.info(f"Chat {chat_id}: недостаточно данных для автокорректировки")
+        return None
+    
+    logger.info(f"Chat {chat_id}: автокорректировка на основе {failed_stats['total_failed']} провалов")
+    
+    # Текущие веса
+    current_weights = {
+        'no_username_risk': config['no_username_risk'],
+        'arabic_cjk_risk': config['arabic_cjk_risk'],
+        'weird_name_risk': config['weird_name_risk'],
+        'no_avatar_risk': config['no_avatar_risk'],
+        'one_avatar_risk': config['one_avatar_risk'],
+    }
+    
+    updated_weights = current_weights.copy()
+    changes = []
+    weights_changed = False
+    
+    # Корректируем на основе частот (порог 70%)
+    HIGH_FREQ_THRESHOLD = 0.70
+    ADJUSTMENT_STEP = 5
+    
+    # Username
+    if failed_stats['no_username_rate'] > HIGH_FREQ_THRESHOLD:
+        old = current_weights['no_username_risk']
+        new = min(old + ADJUSTMENT_STEP, 20)  # макс 20
+        if new != old:
+            updated_weights['no_username_risk'] = new
+            changes.append(f"no_username_risk: {old} -> {new} (rate={failed_stats['no_username_rate']:.2%})")
+            weights_changed = True
+    
+    # Арабские/CJK
+    if failed_stats['arabic_cjk_rate'] > HIGH_FREQ_THRESHOLD:
+        old = current_weights['arabic_cjk_risk']
+        new = min(old + ADJUSTMENT_STEP, 40)  # макс 40
+        if new != old:
+            updated_weights['arabic_cjk_risk'] = new
+            changes.append(f"arabic_cjk_risk: {old} -> {new} (rate={failed_stats['arabic_cjk_rate']:.2%})")
+            weights_changed = True
+    
+    # Weird names (без латиницы/кириллицы)
+    if failed_stats['weird_name_rate'] > HIGH_FREQ_THRESHOLD:
+        old = current_weights['weird_name_risk']
+        new = min(old + ADJUSTMENT_STEP, 25)  # макс 25
+        if new != old:
+            updated_weights['weird_name_risk'] = new
+            changes.append(f"weird_name_risk: {old} -> {new} (rate={failed_stats['weird_name_rate']:.2%})")
+            weights_changed = True
+    
+    # Нет аватарок
+    if failed_stats['no_avatar_rate'] > HIGH_FREQ_THRESHOLD:
+        old = current_weights['no_avatar_risk']
+        new = min(old + ADJUSTMENT_STEP, 30)  # макс 30
+        if new != old:
+            updated_weights['no_avatar_risk'] = new
+            changes.append(f"no_avatar_risk: {old} -> {new} (rate={failed_stats['no_avatar_rate']:.2%})")
+            weights_changed = True
+    
+    # Одна аватарка
+    if failed_stats['one_avatar_rate'] > HIGH_FREQ_THRESHOLD:
+        old = current_weights['one_avatar_risk']
+        new = min(old + ADJUSTMENT_STEP, 15)  # макс 15
+        if new != old:
+            updated_weights['one_avatar_risk'] = new
+            changes.append(f"one_avatar_risk: {old} -> {new} (rate={failed_stats['one_avatar_rate']:.2%})")
+            weights_changed = True
+    
+    # Проверяем порог
+    # Если боты проходят скоринг с высоким скором и валятся на капче - понижаем порог
+    threshold = config['threshold']
+    avg_failed_score = failed_stats['avg_failed_score']
+    threshold_changed = False
+    
+    if avg_failed_score > 0 and avg_failed_score >= threshold - 10:
+        # Боты проходят скоринг с высоким скором (близким к порогу)
+        # Значит порог слишком мягкий - понижаем, чтобы они банились скорингом
+        new_threshold = max(threshold - 5, 20)  # мин порог 20
+        if new_threshold != threshold:
+            threshold = new_threshold
+            changes.append(f"threshold: {config['threshold']} -> {new_threshold} (avg_failed={avg_failed_score}, too close to threshold)")
+            threshold_changed = True
+    
+    # Применяем изменения
+    if weights_changed or threshold_changed:
+        import json
+        
+        updates = {}
+        
+        # Сохраняем обновлённые веса как JSON
+        if weights_changed:
+            # Берём все веса из конфига (не только те что изменились)
+            all_weights = {
+                'max_lang_risk': config['max_lang_risk'],
+                'max_id_risk': config['max_id_risk'],
+                'premium_bonus': config['premium_bonus'],
+                'no_avatar_risk': updated_weights['no_avatar_risk'],
+                'one_avatar_risk': updated_weights['one_avatar_risk'],
+                'no_username_risk': updated_weights['no_username_risk'],
+                'weird_name_risk': updated_weights['weird_name_risk'],
+                'arabic_cjk_risk': updated_weights['arabic_cjk_risk'],
+            }
+            updates['scoring_weights'] = json.dumps(all_weights)
+        
+        # Обновляем порог если изменился
+        if threshold_changed:
+            updates['scoring_threshold'] = threshold
+        
+        await db.update_chat_settings(chat_id, **updates)
+        logger.info(f"Chat {chat_id}: применены изменения:\n" + "\n".join(changes))
+        return {
+            'changes': changes,
+            'stats': failed_stats
+        }
+    else:
+        logger.info(f"Chat {chat_id}: корректировка не требуется")
+        return None
+
+
+async def should_trigger_auto_adjust(chat_id: int) -> bool:
+    """
+    Проверить нужно ли запускать автокорректировку.
+    Запускается каждые 50 провалов капчи.
+    """
+    # Считаем провалы за последние 7 дней
+    failed_stats = await db.get_failed_captcha_stats(chat_id, days=7, min_samples=1)
+    if not failed_stats:
+        return False
+    
+    total = failed_stats['total_failed']
+    # Запускаем каждые 50 провалов (50, 100, 150, ...)
+    return total > 0 and total % 50 == 0

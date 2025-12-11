@@ -39,7 +39,9 @@ class Database:
                 added_at INTEGER NOT NULL,
                 scoring_enabled BOOLEAN DEFAULT 0,
                 scoring_threshold INTEGER DEFAULT 50,
-                scoring_lang_distribution TEXT DEFAULT '{"ru": 0.8, "en": 0.2}'
+                scoring_lang_distribution TEXT DEFAULT '{"ru": 0.8, "en": 0.2}',
+                scoring_weights TEXT DEFAULT '{"max_lang_risk": 30, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}',
+                scoring_auto_adjust BOOLEAN DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS attack_sessions (
@@ -84,6 +86,23 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_good_users_chat ON good_users(chat_id, verified_at);
             CREATE INDEX IF NOT EXISTS idx_good_users_lookup ON good_users(chat_id, user_id);
+
+            CREATE TABLE IF NOT EXISTS failed_captcha_features (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                language_code TEXT,
+                has_username BOOLEAN,
+                photo_count INTEGER,
+                name_has_latin_cyrillic BOOLEAN,
+                name_has_arabic_cjk BOOLEAN,
+                is_premium BOOLEAN,
+                scoring_score INTEGER,
+                failed_at INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_failed_captcha_chat ON failed_captcha_features(chat_id, failed_at);
         ''')
         await self._connection.commit()
 
@@ -289,17 +308,31 @@ class Database:
             return bool(row['scoring_enabled']) if row else False
 
     async def get_scoring_config(self, chat_id: int) -> Optional[Dict[str, Any]]:
-        """Получить конфигурацию скоринга для чата"""
-        async with self._connection.execute(
-            'SELECT scoring_threshold, scoring_lang_distribution FROM chats WHERE chat_id = ?',
-            (chat_id,)
-        ) as cursor:
+        """Получить конфигурацию скоринга для чата со всеми весами"""
+        async with self._connection.execute('''
+            SELECT scoring_threshold, scoring_lang_distribution, 
+                   scoring_weights, scoring_auto_adjust
+            FROM chats WHERE chat_id = ?
+        ''', (chat_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
                 return None
+            
+            # Парсим веса из JSON
+            weights = json.loads(row['scoring_weights']) if row['scoring_weights'] else {}
+            
             return {
                 'threshold': row['scoring_threshold'],
-                'lang_distribution': json.loads(row['scoring_lang_distribution'])
+                'lang_distribution': json.loads(row['scoring_lang_distribution']),
+                'max_lang_risk': weights.get('max_lang_risk', 30),
+                'max_id_risk': weights.get('max_id_risk', 20),
+                'premium_bonus': weights.get('premium_bonus', -20),
+                'no_avatar_risk': weights.get('no_avatar_risk', 15),
+                'one_avatar_risk': weights.get('one_avatar_risk', 5),
+                'no_username_risk': weights.get('no_username_risk', 5),
+                'weird_name_risk': weights.get('weird_name_risk', 10),
+                'arabic_cjk_risk': weights.get('arabic_cjk_risk', 25),
+                'auto_adjust': bool(row['scoring_auto_adjust'])
             }
 
     async def add_good_user(self, chat_id: int, user_id: int, username: Optional[str],
@@ -310,6 +343,97 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (chat_id, user_id, username, language_code, is_premium, int(time.time())))
         await self._connection.commit()
+
+    async def log_failed_captcha_features(self, chat_id: int, user_id: int, 
+                                           language_code: Optional[str], has_username: bool,
+                                           photo_count: int, name_has_latin_cyrillic: bool,
+                                           name_has_arabic_cjk: bool, is_premium: bool,
+                                           scoring_score: int):
+        """Записать характеристики пользователя, не прошедшего капчу"""
+        await self._connection.execute('''
+            INSERT INTO failed_captcha_features 
+            (chat_id, user_id, language_code, has_username, photo_count, 
+             name_has_latin_cyrillic, name_has_arabic_cjk, is_premium, scoring_score, failed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (chat_id, user_id, language_code, has_username, photo_count,
+              name_has_latin_cyrillic, name_has_arabic_cjk, is_premium, scoring_score,
+              int(time.time())))
+        await self._connection.commit()
+    
+    async def get_failed_captcha_stats(self, chat_id: int, days: int = 7, 
+                                       min_samples: int = 30) -> Optional[Dict[str, Any]]:
+        """Получить статистику неудачных капч для автокорректировки"""
+        cutoff_time = int(time.time()) - (days * 24 * 60 * 60)
+        
+        # Проверяем достаточно ли данных
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            total = row['count'] if row else 0
+            
+            if total < min_samples:
+                return None  # Недостаточно данных для корректировки
+        
+        # Собираем статистику по признакам
+        stats = {'total_failed': total}
+        
+        # Процент без username
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ? AND has_username = 0
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['no_username_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Процент с арабскими/CJK
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ? AND name_has_arabic_cjk = 1
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['arabic_cjk_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Процент без латиницы/кириллицы
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ? AND name_has_latin_cyrillic = 0
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['weird_name_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Распределение по photo_count
+        async with self._connection.execute('''
+            SELECT photo_count, COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ?
+            GROUP BY photo_count
+        ''', (chat_id, cutoff_time)) as cursor:
+            rows = await cursor.fetchall()
+            photo_dist = {row['photo_count']: row['count'] / total for row in rows}
+            stats['no_avatar_rate'] = photo_dist.get(0, 0)
+            stats['one_avatar_rate'] = photo_dist.get(1, 0)
+        
+        # Топ языков неудачников
+        async with self._connection.execute('''
+            SELECT language_code, COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ? AND language_code IS NOT NULL
+            GROUP BY language_code
+            ORDER BY count DESC
+            LIMIT 5
+        ''', (chat_id, cutoff_time)) as cursor:
+            rows = await cursor.fetchall()
+            stats['top_failed_langs'] = {row['language_code']: row['count'] / total for row in rows}
+        
+        # Средний scoring_score среди неудачников
+        async with self._connection.execute('''
+            SELECT AVG(scoring_score) as avg_score FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['avg_failed_score'] = int(row['avg_score']) if row['avg_score'] else 0
+        
+        return stats
 
     async def get_scoring_stats(self, chat_id: int, days: int = 7) -> Dict[str, Any]:
         """Получить статистику для скоринга за последние N дней"""

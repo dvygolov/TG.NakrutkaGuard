@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Optional, Union
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
@@ -7,10 +8,83 @@ from bot.database import db
 from bot.utils.captcha import captcha_gen
 from bot.utils.logger import chat_logger
 from bot.utils.message_utils import delete_message_later
+from bot.utils.scoring import score_user, ScoringConfig, ScoringStats, LATIN_CYRILLIC_REGEX, ARABIC_CJK_REGEX
+from bot.utils.scoring_auto_adjust import auto_adjust_scoring, should_trigger_auto_adjust
 import time
 import html
 
+logger = logging.getLogger(__name__)
+
 router = Router()
+
+
+async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
+    """
+    Логировать характеристики пользователя, не прошедшего капчу.
+    Используется для автоматической корректировки весов скоринга.
+    """
+    try:
+        # Получаем информацию о пользователе
+        user = await bot.get_chat_member(chat_id, user_id)
+        user_obj = user.user
+        
+        # Получаем количество аватарок
+        photo_count = 0
+        try:
+            photos = await bot.get_user_profile_photos(user_id, limit=100)
+            photo_count = photos.total_count
+        except Exception:
+            pass
+        
+        # Анализируем имя
+        full_name = user_obj.full_name or ""
+        name_has_latin_cyrillic = bool(LATIN_CYRILLIC_REGEX.search(full_name))
+        name_has_arabic_cjk = bool(ARABIC_CJK_REGEX.search(full_name))
+        
+        # Вычисляем скор, который был у этого пользователя
+        scoring_score = 0
+        scoring_config = await db.get_scoring_config(chat_id)
+        if scoring_config:
+            try:
+                stats_data = await db.get_scoring_stats(chat_id, days=7)
+                cfg = ScoringConfig(
+                    lang_distribution=scoring_config['lang_distribution'],
+                    max_lang_risk=scoring_config['max_lang_risk'],
+                    max_id_risk=scoring_config['max_id_risk'],
+                    premium_bonus=scoring_config['premium_bonus'],
+                    no_avatar_risk=scoring_config['no_avatar_risk'],
+                    one_avatar_risk=scoring_config['one_avatar_risk'],
+                    no_username_risk=scoring_config['no_username_risk'],
+                    weird_name_risk=scoring_config['weird_name_risk'],
+                    arabic_cjk_risk=scoring_config['arabic_cjk_risk']
+                )
+                stats = ScoringStats(
+                    lang_counts=stats_data['lang_counts'],
+                    total_good_joins=stats_data['total_good_joins'],
+                    p95_id=stats_data['p95_id'],
+                    p99_id=stats_data['p99_id']
+                )
+                scoring_score = score_user(user_obj, photo_count=photo_count, cfg=cfg, stats=stats)
+            except Exception as e:
+                logger.warning(f"Не удалось вычислить скор для failed captcha user {user_id}: {e}")
+        
+        # Сохраняем в БД
+        await db.log_failed_captcha_features(
+            chat_id=chat_id,
+            user_id=user_id,
+            language_code=user_obj.language_code,
+            has_username=bool(user_obj.username),
+            photo_count=photo_count,
+            name_has_latin_cyrillic=name_has_latin_cyrillic,
+            name_has_arabic_cjk=name_has_arabic_cjk,
+            is_premium=user_obj.is_premium or False,
+            scoring_score=scoring_score
+        )
+        
+        logger.info(f"Logged failed captcha for user {user_id} in chat {chat_id}: score={scoring_score}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка логирования failed captcha для user {user_id}: {e}")
 
 
 def _format_welcome_text(template: str, user: Union[Message, CallbackQuery]) -> str:
@@ -107,6 +181,9 @@ async def _captcha_timeout_handler(bot: Bot, chat_id: int, user_id: int, message
         
         print(f"[CAPTCHA] User={user_id} НЕ прошёл капчу, кикаю...")
         
+        # Логируем характеристики неудачника для ML
+        await _log_failed_captcha_user(bot, chat_id, user_id)
+        
         # Не прошёл - баним
         kick_success = False
         try:
@@ -131,6 +208,16 @@ async def _captcha_timeout_handler(bot: Bot, chat_id: int, user_id: int, message
             print(f"[CAPTCHA] User={user_id} удалён из pending")
         except Exception as e:
             print(f"[CAPTCHA] Ошибка удаления из pending: {e}")
+        
+        # Проверяем нужна ли автокорректировка скоринга
+        if kick_success:
+            try:
+                if await should_trigger_auto_adjust(chat_id):
+                    result = await auto_adjust_scoring(chat_id)
+                    if result:
+                        logger.info(f"Chat {chat_id}: автокорректировка выполнена: {result['changes']}")
+            except Exception as e:
+                logger.error(f"Ошибка автокорректировки для chat {chat_id}: {e}")
             
     except asyncio.CancelledError:
         print(f"[CAPTCHA] Таймер отменён для user={user_id}")
