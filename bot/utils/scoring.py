@@ -26,6 +26,7 @@ class ScoringConfig:
     one_avatar_risk: int = 5     # штраф за 1 аватар (подозрительно)
     no_username_risk: int = 5    # штраф за отсутствие username
     weird_name_risk: int = 10    # штраф за отсутствие латиницы/кириллицы в ФИО
+    arabic_cjk_risk: int = 25    # штраф за арабские/китайские символы в имени
 
 
 @dataclass
@@ -46,6 +47,8 @@ class ScoringStats:
 
 LANG_CODE_RE = re.compile(r"^[a-zA-Z]{2,3}")       # выцепляем базовый язык из 'en-US' и т.п.
 NAME_HAS_LAT_CYR_RE = re.compile(r"[A-Za-zА-Яа-я]")  # проверка ФИО на латиницу/кириллицу
+NAME_HAS_ARABIC_RE = re.compile(r"[\u0600-\u06FF]")  # арабские символы
+NAME_HAS_CJK_RE = re.compile(r"[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]")  # китайские/японские/корейские
 
 
 def _normalize_lang(lang: Optional[str]) -> Optional[str]:
@@ -164,13 +167,25 @@ def score_user(
         details["username"] = username
         details["username_risk"] = 0
 
-    # 4. ФИО – отсутствие рус/англ букв = зло
+    # 4. ФИО – проверка символов
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
     has_normal_letters = _has_lat_or_cyrillic(full_name)
+    has_arabic = bool(NAME_HAS_ARABIC_RE.search(full_name))
+    has_cjk = bool(NAME_HAS_CJK_RE.search(full_name))
+    
+    # Отсутствие рус/англ букв = подозрительно
     if not has_normal_letters:
         score += cfg.weird_name_risk
+    
+    # Наличие арабских или CJK символов = очень подозрительно
+    if has_arabic or has_cjk:
+        score += cfg.arabic_cjk_risk
+    
     details["full_name"] = full_name
     details["weird_name_risk"] = 0 if has_normal_letters else cfg.weird_name_risk
+    details["arabic_cjk_risk"] = cfg.arabic_cjk_risk if (has_arabic or has_cjk) else 0
+    details["has_arabic"] = has_arabic
+    details["has_cjk"] = has_cjk
 
     # 5. Новизна ID
     id_risk = _compute_id_risk(user.id, cfg, stats)
