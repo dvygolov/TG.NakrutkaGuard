@@ -2,7 +2,7 @@ from typing import Optional, Dict, Any
 from aiogram.types import Chat, User
 from bot.database import db
 from bot.utils.logger import chat_logger
-import time
+from bot.utils.join_counter import join_counter
 import time
 
 
@@ -35,13 +35,10 @@ class AttackDetector:
                 'attack_ended': False
             }
         
-        # Логируем вступление
-        await db.log_join(
-            chat_id, user.id, user.username, 
-            user.is_bot, user.is_premium or False, 
-            action_taken=None
-        )
+        # Добавляем вступление в in-memory счётчик
+        join_counter.add_join(chat_id, user.id, user.is_premium or False)
         
+        # Логируем вступление в файл
         chat_logger.log_join(
             chat_id, chat_username, user.id, 
             user.username, user.is_bot, user.is_premium or False
@@ -53,8 +50,8 @@ class AttackDetector:
         protect_premium = chat_data['protect_premium']
         protection_active = chat_data['protection_active']
         
-        # Считаем вступления в окне
-        recent_joins = await db.count_joins_in_window(chat_id, time_window)
+        # Считаем вступления в окне - МГНОВЕННО из памяти!
+        recent_joins = join_counter.count_in_window(chat_id, time_window)
         
         result = {
             'should_kick': False,
@@ -70,11 +67,9 @@ class AttackDetector:
             if user.is_premium and protect_premium:
                 result['should_kick'] = False
                 result['reason'] = 'premium_protected'
-                await db.update_action_taken(chat_id, user.id, 'allowed')
             else:
                 result['should_kick'] = True
                 result['reason'] = 'protection_mode'
-                await db.update_action_taken(chat_id, user.id, 'kicked')
                 await db.increment_kicked(chat_id)
             
             # Проверяем не пора ли выключить защиту
@@ -91,9 +86,8 @@ class AttackDetector:
                     stats = await db.get_last_attack_stats(chat_id)
                     if stats:
                         duration = stats['end_time'] - stats['start_time']
-                        total_joins = await db.count_joins_during_attack(
-                            chat_id, stats['start_time'], stats['end_time']
-                        )
+                        # Приблизительное кол-во joins (т.к. точная история не хранится)
+                        total_joins = stats['total_kicked']
                         chat_logger.log_attack_end(
                             chat_id, chat_username, duration, total_joins, stats['total_kicked']
                         )
@@ -106,11 +100,8 @@ class AttackDetector:
                 changed = await db.set_protection_active(chat_id, True)
                 
                 if changed:
-                    # Вычисляем старт атаки как самое раннее вступление в окне
-                    window_start = await db.get_oldest_join_in_window(chat_id, time_window)
-                    attack_start_time = window_start or int(time.time())
-                    
                     # АТАКА! Включаем защиту
+                    attack_start_time = int(time.time())
                     await db.start_attack_session(chat_id, attack_start_time)
                     
                     result['attack_started'] = True
@@ -120,15 +111,15 @@ class AttackDetector:
                     chat_logger.log_protection_mode(chat_id, chat_username, True)
                     
                     # Кикаем ВСЕХ из окна (кроме premium и текущего - его отдельно)
-                    users_in_window = await db.get_users_in_window(chat_id, time_window)
+                    users_in_window = join_counter.get_users_in_window(chat_id, time_window)
                     result['users_to_kick'] = []
                     
                     for user_data in users_in_window:
-                        # Пропускаем premium
-                        if user_data['is_premium'] and protect_premium:
-                            continue
                         # Пропускаем текущего юзера (его кикнем отдельно)
                         if user_data['user_id'] == user.id:
+                            continue
+                        # Проверяем premium защиту
+                        if user_data['is_premium'] and protect_premium:
                             continue
                         result['users_to_kick'].append(user_data['user_id'])
                 
@@ -136,7 +127,6 @@ class AttackDetector:
                 if not (user.is_premium and protect_premium):
                     result['should_kick'] = True
                     result['reason'] = 'attack_detected'
-                    await db.update_action_taken(chat_id, user.id, 'kicked')
                     await db.increment_kicked(chat_id)
         
         return result
@@ -156,16 +146,10 @@ class AttackDetector:
         duration_min = duration // 60
         duration_sec = duration % 60
         
-        # Считаем общее кол-во вступлений за атаку
-        total_joins = await db.count_joins_during_attack(
-            chat_id, stats['start_time'], stats['end_time']
-        )
-        
         message = (
             f"✅ <b>АТАКА ЗАВЕРШЕНА</b>\n"
             f"📍 Чат: {chat_ref}\n\n"
             f"⏱ Длительность: {duration_min}м {duration_sec}с\n"
-            f"👥 Всего вступлений: {total_joins}\n"
             f"🚫 Кикнуто: {stats['total_kicked']}\n"
         )
         

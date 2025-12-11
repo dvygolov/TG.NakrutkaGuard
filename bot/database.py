@@ -42,20 +42,6 @@ class Database:
                 scoring_lang_distribution TEXT DEFAULT '{"ru": 0.8, "en": 0.2}'
             );
 
-            CREATE TABLE IF NOT EXISTS join_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                username TEXT,
-                is_bot BOOLEAN NOT NULL,
-                is_premium BOOLEAN DEFAULT 0,
-                join_time INTEGER NOT NULL,
-                action_taken TEXT,
-                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_join_time ON join_events(chat_id, join_time);
-
             CREATE TABLE IF NOT EXISTS attack_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id INTEGER NOT NULL,
@@ -168,46 +154,9 @@ class Database:
         await self._connection.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
         await self._connection.commit()
 
-    # === JOIN EVENTS ===
-
-    async def log_join(self, chat_id: int, user_id: int, username: Optional[str],
-                      is_bot: bool, is_premium: bool, action_taken: Optional[str] = None):
-        """Записать событие вступления"""
-        await self._connection.execute('''
-            INSERT INTO join_events (chat_id, user_id, username, is_bot, is_premium, join_time, action_taken)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (chat_id, user_id, username, is_bot, is_premium, int(time.time()), action_taken))
-        await self._connection.commit()
-
-    async def count_joins_in_window(self, chat_id: int, time_window: int) -> int:
-        """Подсчитать кол-во вступлений за последние time_window секунд"""
-        cutoff_time = int(time.time()) - time_window
-        async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM join_events 
-            WHERE chat_id = ? AND join_time >= ?
-        ''', (chat_id, cutoff_time)) as cursor:
-            row = await cursor.fetchone()
-            return row['count'] if row else 0
-
-    async def get_users_in_window(self, chat_id: int, time_window: int) -> List[Dict[str, Any]]:
-        """Получить всех пользователей, вступивших в окне"""
-        cutoff_time = int(time.time()) - time_window
-        async with self._connection.execute('''
-            SELECT user_id, username, is_bot, is_premium FROM join_events 
-            WHERE chat_id = ? AND join_time >= ?
-        ''', (chat_id, cutoff_time)) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
-
-    async def update_action_taken(self, chat_id: int, user_id: int, action: str):
-        """Обновить действие для последнего join event пользователя"""
-        await self._connection.execute('''
-            UPDATE join_events SET action_taken = ?
-            WHERE chat_id = ? AND user_id = ? 
-            AND id = (SELECT id FROM join_events WHERE chat_id = ? AND user_id = ? 
-                     ORDER BY join_time DESC LIMIT 1)
-        ''', (action, chat_id, user_id, chat_id, user_id))
-        await self._connection.commit()
+    # === JOIN EVENTS - DEPRECATED ===
+    # Все методы удалены, т.к. подсчёт вступлений перенесён в in-memory счётчик
+    # См. bot/utils/join_counter.py
 
     # === ATTACK SESSIONS ===
 
@@ -256,29 +205,6 @@ class Database:
         ''', (chat_id,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
-
-    async def count_joins_during_attack(self, chat_id: int, start_time: int, end_time: int) -> int:
-        """Подсчитать кол-во вступлений за период атаки"""
-        return await self.count_joins_between(chat_id, start_time, end_time)
-
-    async def count_joins_between(self, chat_id: int, start_time: int, end_time: int) -> int:
-        """Подсчитать кол-во вступлений в произвольном интервале [start_time, end_time]"""
-        async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM join_events
-            WHERE chat_id = ? AND join_time >= ? AND join_time <= ?
-        ''', (chat_id, start_time, end_time)) as cursor:
-            row = await cursor.fetchone()
-            return row['count'] if row else 0
-
-    async def get_oldest_join_in_window(self, chat_id: int, time_window: int) -> Optional[int]:
-        """Получить минимальное время вступления в текущем окне (для корректного старта атаки)"""
-        cutoff_time = int(time.time()) - time_window
-        async with self._connection.execute('''
-            SELECT MIN(join_time) AS min_time FROM join_events
-            WHERE chat_id = ? AND join_time >= ?
-        ''', (chat_id, cutoff_time)) as cursor:
-            row = await cursor.fetchone()
-            return row['min_time'] if row and row['min_time'] is not None else None
 
     # === CAPTCHA ===
 

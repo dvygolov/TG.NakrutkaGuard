@@ -4,6 +4,7 @@ from aiogram.filters import ChatMemberUpdatedFilter, MEMBER, KICKED, LEFT
 from bot.utils.detector import detector
 from bot.utils.logger import chat_logger
 from bot.utils.scoring import score_user, ScoringConfig, ScoringStats
+from bot.utils.join_counter import join_counter
 from bot.database import db
 from bot.config import ADMIN_IDS
 from bot.handlers.captcha import send_captcha
@@ -105,7 +106,6 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                             chat.id, chat.username, user.id,
                             user.username, f"scoring_{risk_score}"
                         )
-                        await db.update_action_taken(chat.id, user.id, f"kicked_scoring_{risk_score}")
                     logger.info(
                         f"Юзер {user.id} кикнут по скорингу: score={risk_score} > threshold={scoring_config_data['threshold']}"
                     )
@@ -143,7 +143,8 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     # Если началась атака
     if result['attack_started']:
         # Уведомляем админов
-        recent_joins = await db.count_joins_in_window(chat.id, (await db.get_chat(chat.id))['time_window'])
+        time_window = (await db.get_chat(chat.id))['time_window']
+        recent_joins = join_counter.count_in_window(chat.id, time_window)
         message = await detector.get_attack_start_message(chat.id, recent_joins)
         await notify_admins(bot, chat.id, message)
         

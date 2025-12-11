@@ -1,10 +1,14 @@
 """
 Миграция БД для всех функций бота
+
 Добавляет:
 - Поля для капчи (captcha_enabled, welcome_message, rules_message, allow_channel_posts)
 - Таблицу pending_captcha
 - Поля для скоринга (scoring_enabled, scoring_threshold, scoring_lang_distribution)
 - Таблицу good_users
+
+Удаляет:
+- Таблицу join_events (устарела, заменена на in-memory счётчик)
 
 Запуск: python migrate_db.py
 """
@@ -139,7 +143,27 @@ async def migrate():
         else:
             print("✓ Таблица good_users уже есть")
         
+        # === ОЧИСТКА УСТАРЕВШИХ ТАБЛИЦ ===
+        print("\n🗑 Проверка устаревших таблиц...")
+        
+        # Удаляем join_events - больше не используется (заменён на in-memory счётчик)
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='join_events'"
+        )
+        if await cursor.fetchone():
+            print("➖ Удаляем устаревшую таблицу join_events...")
+            await db.execute('DROP TABLE join_events')
+            print("✅ Таблица join_events удалена")
+        else:
+            print("✓ Устаревших таблиц нет")
+        
         await db.commit()
+        
+        # Вакуум для освобождения места
+        print("\n🧹 Оптимизация БД...")
+        await db.execute('VACUUM')
+        print("✅ БД оптимизирована")
+        
         print("\n✅ Миграция успешно завершена!")
 
 
