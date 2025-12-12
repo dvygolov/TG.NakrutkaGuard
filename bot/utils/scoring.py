@@ -19,7 +19,8 @@ class ScoringConfig:
         Пример: {'ru': 0.8, 'en': 0.2}
     """
     lang_distribution: Dict[str, float]
-    max_lang_risk: int = 30      # максимум штрафа за язык
+    max_lang_risk: int = 30      # максимум штрафа за редкий/неожиданный язык
+    no_lang_risk: int = 15       # штраф за отсутствие языка
     max_id_risk: int = 20        # максимум штрафа за новый ID
     premium_bonus: int = -20     # сколько вычитаем за премиум
     no_avatar_risk: int = 15     # штраф за 0 аватаров
@@ -66,35 +67,43 @@ def _compute_lang_risk(user_lang: Optional[str],
                        cfg: ScoringConfig,
                        stats: ScoringStats) -> int:
     """
-    Чем меньше вероятность такого языка в нашем канале,
-    тем больше штраф (до cfg.max_lang_risk).
+    Новая логика языкового риска:
+    - Нет языка → no_lang_risk (штраф)
+    - Язык в распределении → бонус пропорционально популярности: -(share * max_lang_risk)
+    - Редкий/неожиданный язык → max_lang_risk (штраф)
+    
+    Примеры (max_lang_risk=30, no_lang_risk=15):
+    - None → +15
+    - ru (80%) → -24
+    - en (20%) → -6
+    - ar (не в распределении) → +30
     """
-    max_risk = cfg.max_lang_risk
-
     if not user_lang:
-        # язык не указан – считаем это довольно подозрительным
-        return int(max_risk * 0.6)
+        # Нет языка - отдельный штраф
+        return cfg.no_lang_risk
 
     lang = _normalize_lang(user_lang)
 
-    # нормируем ожидаемое распределение
+    # Нормируем ожидаемое распределение
     total_expected = sum(cfg.lang_distribution.values()) or 1.0
     expected_share = cfg.lang_distribution.get(lang, 0.0) / total_expected
 
-    # эмпирическая доля за последние 7 дней
+    # Эмпирическая доля за последние 7 дней
     if stats.total_good_joins > 0:
         empirical_share = stats.lang_counts.get(lang, 0) / stats.total_good_joins
     else:
         empirical_share = expected_share
 
-    # комбинируем prior (конфиг) и эмпирику
+    # Комбинируем prior (конфиг) и эмпирику
     combined_share = 0.7 * expected_share + 0.3 * empirical_share
     combined_share = max(0.0, min(1.0, combined_share))
 
-    # редкость языка: 0 – идеально свой, 1 – совсем чужой
-    rarity = 1.0 - combined_share
-    risk = int(rarity * max_risk)
-    return risk
+    if combined_share > 0.01:  # Язык встречается (порог 1%)
+        # Бонус пропорционально популярности языка
+        return -int(combined_share * cfg.max_lang_risk)
+    else:
+        # Редкий/неожиданный язык - штраф
+        return cfg.max_lang_risk
 
 
 def _compute_id_risk(user_id: int, cfg: ScoringConfig, stats: ScoringStats) -> int:

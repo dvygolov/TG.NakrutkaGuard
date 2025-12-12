@@ -43,6 +43,8 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
         'weird_name_risk': config['weird_name_risk'],
         'no_avatar_risk': config['no_avatar_risk'],
         'one_avatar_risk': config['one_avatar_risk'],
+        'no_lang_risk': config['no_lang_risk'],
+        'max_id_risk': config['max_id_risk'],
     }
     
     updated_weights = current_weights.copy()
@@ -98,6 +100,37 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
             changes.append(f"one_avatar_risk: {old} -> {new} (rate={failed_stats['one_avatar_rate']:.2%})")
             weights_changed = True
     
+    # Язык риск (нет языка)
+    no_lang_rate = failed_stats.get('no_language_rate', 0)
+    if no_lang_rate > HIGH_FREQ_THRESHOLD:
+        old_no_lang = config['no_lang_risk']
+        new_no_lang = min(old_no_lang + ADJUSTMENT_STEP, 25)  # макс 25
+        if new_no_lang != old_no_lang:
+            updated_weights['no_lang_risk'] = new_no_lang
+            changes.append(f"no_lang_risk: {old_no_lang} -> {new_no_lang} (rate={no_lang_rate:.2%})")
+            weights_changed = True
+    
+    # ID риск (на основе p99/p95)
+    id_p99_rate = failed_stats.get('id_above_p99_rate', 0)
+    id_p95_rate = failed_stats.get('id_above_p95_rate', 0)
+    
+    if id_p99_rate > HIGH_FREQ_THRESHOLD:
+        # Много ботов с супер новыми ID (выше p99)
+        old_id_risk = config['max_id_risk']
+        new_id_risk = min(old_id_risk + ADJUSTMENT_STEP, 30)  # макс 30
+        if new_id_risk != old_id_risk:
+            updated_weights['max_id_risk'] = new_id_risk
+            changes.append(f"max_id_risk: {old_id_risk} -> {new_id_risk} (p99_rate={id_p99_rate:.2%})")
+            weights_changed = True
+    elif id_p95_rate > HIGH_FREQ_THRESHOLD:
+        # Много ботов с новыми ID (выше p95, но не p99)
+        old_id_risk = config['max_id_risk']
+        new_id_risk = min(old_id_risk + ADJUSTMENT_STEP, 30)  # макс 30
+        if new_id_risk != old_id_risk:
+            updated_weights['max_id_risk'] = new_id_risk
+            changes.append(f"max_id_risk: {old_id_risk} -> {new_id_risk} (p95_rate={id_p95_rate:.2%})")
+            weights_changed = True
+    
     # Проверяем порог
     # Если боты проходят скоринг с высоким скором и валятся на капче - понижаем порог
     threshold = config['threshold']
@@ -124,7 +157,8 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
             # Берём все веса из конфига (не только те что изменились)
             all_weights = {
                 'max_lang_risk': config['max_lang_risk'],
-                'max_id_risk': config['max_id_risk'],
+                'no_lang_risk': updated_weights['no_lang_risk'],  # используем обновлённый
+                'max_id_risk': updated_weights['max_id_risk'],  # используем обновлённый
                 'premium_bonus': config['premium_bonus'],
                 'no_avatar_risk': updated_weights['no_avatar_risk'],
                 'one_avatar_risk': updated_weights['one_avatar_risk'],

@@ -40,7 +40,7 @@ class Database:
                 scoring_enabled BOOLEAN DEFAULT 0,
                 scoring_threshold INTEGER DEFAULT 50,
                 scoring_lang_distribution TEXT DEFAULT '{"ru": 0.8, "en": 0.2}',
-                scoring_weights TEXT DEFAULT '{"max_lang_risk": 30, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}',
+                scoring_weights TEXT DEFAULT '{"max_lang_risk": 30, "no_lang_risk": 15, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}',
                 scoring_auto_adjust BOOLEAN DEFAULT 1
             );
 
@@ -325,6 +325,7 @@ class Database:
                 'threshold': row['scoring_threshold'],
                 'lang_distribution': json.loads(row['scoring_lang_distribution']),
                 'max_lang_risk': weights.get('max_lang_risk', 30),
+                'no_lang_risk': weights.get('no_lang_risk', 15),
                 'max_id_risk': weights.get('max_id_risk', 20),
                 'premium_bonus': weights.get('premium_bonus', -20),
                 'no_avatar_risk': weights.get('no_avatar_risk', 15),
@@ -432,6 +433,50 @@ class Database:
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
             stats['avg_failed_score'] = int(row['avg_score']) if row['avg_score'] else 0
+        
+        # Процент без языка
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ? AND (language_code IS NULL OR language_code = '')
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['no_language_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Процент новых ID (юзер ID > 8 млрд = зарегистрирован недавно, примерно)
+        # Для более точного анализа нужно сравнивать с p95 из good_users
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ? AND user_id > 8000000000
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['new_id_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Получаем p95 и p99 из good_users для сравнения
+        scoring_stats = await self.get_scoring_stats(chat_id, days=days)
+        p95 = scoring_stats.get('p95_id')
+        p99 = scoring_stats.get('p99_id')
+        
+        if p95:
+            # Процент ботов с ID > p95
+            async with self._connection.execute('''
+                SELECT COUNT(*) as count FROM failed_captcha_features
+                WHERE chat_id = ? AND failed_at >= ? AND user_id > ?
+            ''', (chat_id, cutoff_time, p95)) as cursor:
+                row = await cursor.fetchone()
+                stats['id_above_p95_rate'] = (row['count'] / total) if total > 0 else 0
+        else:
+            stats['id_above_p95_rate'] = 0
+        
+        if p99:
+            # Процент ботов с ID > p99
+            async with self._connection.execute('''
+                SELECT COUNT(*) as count FROM failed_captcha_features
+                WHERE chat_id = ? AND failed_at >= ? AND user_id > ?
+            ''', (chat_id, cutoff_time, p99)) as cursor:
+                row = await cursor.fetchone()
+                stats['id_above_p99_rate'] = (row['count'] / total) if total > 0 else 0
+        else:
+            stats['id_above_p99_rate'] = 0
         
         return stats
 

@@ -68,6 +68,7 @@ async def show_current_settings(callback: CallbackQuery):
     text += f"• Нет аватарок: <code>{config['no_avatar_risk']}</code>\n"
     text += f"• Одна аватарка: <code>{config['one_avatar_risk']}</code>\n"
     text += f"• Макс. риск по языку: <code>{config['max_lang_risk']}</code>\n"
+    text += f"• Нет языка: <code>{config['no_lang_risk']}</code>\n"
     text += f"• Макс. риск по ID: <code>{config['max_id_risk']}</code>\n"
     text += f"• Бонус премиум: <code>{config['premium_bonus']}</code>\n\n"
     
@@ -160,7 +161,9 @@ async def show_adjustment_history(callback: CallbackQuery):
         text += f"• Арабские/CJK: {failed_stats['arabic_cjk_rate'] * 100:.1f}%\n"
         text += f"• Странное имя: {failed_stats['weird_name_rate'] * 100:.1f}%\n"
         text += f"• Без аватарок: {failed_stats['no_avatar_rate'] * 100:.1f}%\n"
-        text += f"• Одна аватарка: {failed_stats['one_avatar_rate'] * 100:.1f}%\n\n"
+        text += f"• Одна аватарка: {failed_stats['one_avatar_rate'] * 100:.1f}%\n"
+        text += f"• Без языка: {failed_stats.get('no_language_rate', 0) * 100:.1f}%\n"
+        text += f"• Новый ID (>8 млрд): {failed_stats.get('new_id_rate', 0) * 100:.1f}%\n\n"
         
         text += f"<b>Средний скор провалов:</b> {failed_stats['avg_failed_score']}\n\n"
         
@@ -199,7 +202,9 @@ async def show_failed_profile(callback: CallbackQuery):
         text += f"• Арабские/CJK символы: {failed_stats['arabic_cjk_rate'] * 100:.1f}%\n"
         text += f"• Без лат/кир в имени: {failed_stats['weird_name_rate'] * 100:.1f}%\n"
         text += f"• Без аватарок: {failed_stats['no_avatar_rate'] * 100:.1f}%\n"
-        text += f"• Одна аватарка: {failed_stats['one_avatar_rate'] * 100:.1f}%\n\n"
+        text += f"• Одна аватарка: {failed_stats['one_avatar_rate'] * 100:.1f}%\n"
+        text += f"• Без языка: {failed_stats.get('no_language_rate', 0) * 100:.1f}%\n"
+        text += f"• Новый ID (>8 млрд): {failed_stats.get('new_id_rate', 0) * 100:.1f}%\n\n"
         
         text += f"<b>Средний скор:</b> {failed_stats['avg_failed_score']}\n\n"
         

@@ -88,6 +88,7 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                 cfg = ScoringConfig(
                     lang_distribution=scoring_config_data['lang_distribution'],
                     max_lang_risk=scoring_config_data['max_lang_risk'],
+                    no_lang_risk=scoring_config_data['no_lang_risk'],
                     max_id_risk=scoring_config_data['max_id_risk'],
                     premium_bonus=scoring_config_data['premium_bonus'],
                     no_avatar_risk=scoring_config_data['no_avatar_risk'],
