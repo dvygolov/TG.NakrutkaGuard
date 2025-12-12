@@ -435,6 +435,52 @@ class Database:
         
         return stats
 
+    async def get_protection_effectiveness(self, chat_id: int, days: int = 7) -> Dict[str, Any]:
+        """Получить статистику эффективности защиты"""
+        cutoff_time = int(time.time()) - (days * 24 * 60 * 60)
+        
+        stats = {}
+        
+        # Кол-во прошедших верификацию
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM good_users
+            WHERE chat_id = ? AND verified_at >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['verified'] = row['count'] if row else 0
+        
+        # Кол-во провалов капчи
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM failed_captcha_features
+            WHERE chat_id = ? AND failed_at >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['failed_captcha'] = row['count'] if row else 0
+        
+        # Кол-во кикнутых в сессиях атак
+        async with self._connection.execute('''
+            SELECT SUM(total_kicked) as total FROM attack_sessions
+            WHERE chat_id = ? AND start_time >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['kicked_in_attack'] = row['total'] if row and row['total'] else 0
+        
+        # Примерный подсчёт кикнутых скорингом (good_users + failed_captcha = прошли скоринг)
+        # scoring_banned = total_joins - verified - failed_captcha - kicked_in_attack
+        # Но у нас нет total_joins, поэтому просто отметим что это неизвестно
+        stats['scoring_banned'] = 0  # TODO: можно добавить счётчик если нужно
+        
+        return stats
+    
+    async def get_adjustment_history(self, chat_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Получить историю автокорректировок скоринга.
+        Пока возвращаем пустой список, т.к. мы не логируем историю изменений.
+        В будущем можно добавить таблицу scoring_adjustments для логирования.
+        """
+        # TODO: создать таблицу scoring_adjustments для логирования изменений
+        return []
+
     async def get_scoring_stats(self, chat_id: int, days: int = 7) -> Dict[str, Any]:
         """Получить статистику для скоринга за последние N дней"""
         cutoff_time = int(time.time()) - (days * 24 * 60 * 60)

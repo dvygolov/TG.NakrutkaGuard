@@ -165,6 +165,7 @@ def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKey
         ],
         [InlineKeyboardButton(text="👑 Premium защита", callback_data=f"toggle_premium_{chat_id}")],
         [InlineKeyboardButton(text="🎯 Скоринг", callback_data=f"toggle_scoring_{chat_id}")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data=f"stats_menu_{chat_id}")],
     ]
     
     # Капча и другие функции только для групп (не для каналов)
