@@ -29,7 +29,7 @@ class CaptchaGenerator:
             (текст_задачи, правильный_ответ, клавиатура)
         """
         # Генерируем простую математическую задачу
-        operation = random.choice(['+', '-'])
+        operation = random.choice(['+', '-', '*', '//'])
         
         if operation == '+':
             num1 = random.randint(1, 5)
@@ -37,12 +37,36 @@ class CaptchaGenerator:
             result = num1 + num2
             
             question = f"Сколько будет {CaptchaGenerator.DIGIT_EMOJIS[num1]} + {CaptchaGenerator.DIGIT_EMOJIS[num2]} ?"
-        else:
+        
+        elif operation == '-':
             num1 = random.randint(5, 9)
             num2 = random.randint(1, num1 - 1)
             result = num1 - num2
             
             question = f"Сколько будет {CaptchaGenerator.DIGIT_EMOJIS[num1]} - {CaptchaGenerator.DIGIT_EMOJIS[num2]} ?"
+        
+        elif operation == '*':
+            num1 = random.randint(2, 5)
+            num2 = random.randint(2, 5)
+            result = num1 * num2
+            
+            question = f"Сколько будет {CaptchaGenerator.DIGIT_EMOJIS[num1]} × {CaptchaGenerator.DIGIT_EMOJIS[num2]} ?"
+        
+        else:  # '//'
+            # Генерируем целочисленное деление с результатом 1-9
+            result = random.randint(1, 9)
+            divisor = random.randint(2, 9)
+            num1 = result * divisor
+            
+            # Форматируем делимое (может быть > 9)
+            num1_str = str(num1)
+            if len(num1_str) == 1:
+                num1_display = CaptchaGenerator.DIGIT_EMOJIS[int(num1_str)]
+            else:
+                # Двузначное число - показываем каждую цифру
+                num1_display = ''.join(CaptchaGenerator.DIGIT_EMOJIS[int(d)] for d in num1_str)
+            
+            question = f"Сколько будет {num1_display} ÷ {CaptchaGenerator.DIGIT_EMOJIS[divisor]} ?"
         
         # Генерируем варианты ответов
         correct_answer = str(result)
