@@ -36,6 +36,13 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
     
     logger.info(f"Chat {chat_id}: автокорректировка на основе {failed_stats['total_failed']} провалов")
     
+    # Получаем статистику успешных юзеров для защиты от false positives
+    good_stats = await db.get_good_users_stats(chat_id, days=7, min_samples=30)
+    if good_stats:
+        logger.info(f"Chat {chat_id}: анализируем {good_stats['total_good']} успешных юзеров для защиты от false positives")
+    else:
+        logger.info(f"Chat {chat_id}: недостаточно успешных юзеров (< 30) для проверки false positives")
+    
     # Текущие веса
     current_weights = {
         'no_username_risk': config['no_username_risk'],
@@ -53,16 +60,24 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
     
     # Корректируем на основе частот (порог 70%)
     HIGH_FREQ_THRESHOLD = 0.70
+    FALSE_POSITIVE_THRESHOLD = 0.50  # если 50%+ успешных имеют признак - не повышаем вес
     ADJUSTMENT_STEP = 5
     
     # Username
     if failed_stats['no_username_rate'] > HIGH_FREQ_THRESHOLD:
-        old = current_weights['no_username_risk']
-        new = min(old + ADJUSTMENT_STEP, 20)  # макс 20
-        if new != old:
-            updated_weights['no_username_risk'] = new
-            changes.append(f"no_username_risk: {old} -> {new} (rate={failed_stats['no_username_rate']:.2%})")
-            weights_changed = True
+        # Защита от false positives: проверяем успешных юзеров
+        good_rate = good_stats.get('no_username_rate', 0) if good_stats else 0
+        if good_stats and good_rate > FALSE_POSITIVE_THRESHOLD:
+            msg = f"no_username_risk: НЕ повышаем - false positive (провалы: {failed_stats['no_username_rate']:.1%}, успешные: {good_rate:.1%})"
+            changes.append(msg)
+            logger.warning(f"Chat {chat_id}: {msg}")
+        else:
+            old = current_weights['no_username_risk']
+            new = min(old + ADJUSTMENT_STEP, 30)  # макс 30
+            if new != old:
+                updated_weights['no_username_risk'] = new
+                changes.append(f"no_username_risk: {old} -> {new} (failed={failed_stats['no_username_rate']:.2%})")
+                weights_changed = True
     
     # Арабские/CJK
     if failed_stats['arabic_cjk_rate'] > HIGH_FREQ_THRESHOLD:
@@ -103,12 +118,19 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
     # Язык риск (нет языка)
     no_lang_rate = failed_stats.get('no_language_rate', 0)
     if no_lang_rate > HIGH_FREQ_THRESHOLD:
-        old_no_lang = config['no_lang_risk']
-        new_no_lang = min(old_no_lang + ADJUSTMENT_STEP, 25)  # макс 25
-        if new_no_lang != old_no_lang:
-            updated_weights['no_lang_risk'] = new_no_lang
-            changes.append(f"no_lang_risk: {old_no_lang} -> {new_no_lang} (rate={no_lang_rate:.2%})")
-            weights_changed = True
+        # Защита от false positives
+        good_no_lang = good_stats.get('no_language_rate', 0) if good_stats else 0
+        if good_stats and good_no_lang > FALSE_POSITIVE_THRESHOLD:
+            msg = f"no_lang_risk: НЕ повышаем - false positive (провалы: {no_lang_rate:.1%}, успешные: {good_no_lang:.1%})"
+            changes.append(msg)
+            logger.warning(f"Chat {chat_id}: {msg}")
+        else:
+            old_no_lang = config['no_lang_risk']
+            new_no_lang = min(old_no_lang + ADJUSTMENT_STEP, 25)  # макс 25
+            if new_no_lang != old_no_lang:
+                updated_weights['no_lang_risk'] = new_no_lang
+                changes.append(f"no_lang_risk: {old_no_lang} -> {new_no_lang} (failed={no_lang_rate:.2%})")
+                weights_changed = True
     
     # ID риск (на основе p99/p95)
     id_p99_rate = failed_stats.get('id_above_p99_rate', 0)

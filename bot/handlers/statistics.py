@@ -167,6 +167,38 @@ async def show_adjustment_history(callback: CallbackQuery):
         
         text += f"<b>Средний скор провалов:</b> {failed_stats['avg_failed_score']}\n\n"
         
+        # Показываем параметры, достигшие максимума
+        config = await db.get_scoring_config(chat_id)
+        if config:
+            max_limits = {
+                'no_username_risk': 30,
+                'arabic_cjk_risk': 40,
+                'weird_name_risk': 25,
+                'no_avatar_risk': 30,
+                'one_avatar_risk': 15,
+                'no_lang_risk': 25,
+                'max_id_risk': 30
+            }
+            maxed_out = []
+            for param, max_val in max_limits.items():
+                if config.get(param, 0) >= max_val:
+                    param_names = {
+                        'no_username_risk': 'Без username',
+                        'arabic_cjk_risk': 'Арабские/CJK',
+                        'weird_name_risk': 'Странное имя',
+                        'no_avatar_risk': 'Без аватарок',
+                        'one_avatar_risk': 'Одна аватарка',
+                        'no_lang_risk': 'Без языка',
+                        'max_id_risk': 'ID риск'
+                    }
+                    maxed_out.append(param_names.get(param, param))
+            
+            if maxed_out:
+                text += f"<b>⚠️ Достигли максимума:</b>\n"
+                for name in maxed_out:
+                    text += f"• {name}\n"
+                text += "\n"
+        
         text += "<i>💡 Если частота признака > 70%, вес автоматически увеличится на 5 пунктов</i>"
     
     await callback.message.edit_text(
@@ -229,31 +261,41 @@ async def show_success_profile(callback: CallbackQuery):
     chat_id = int(callback.data.split("_")[2])
     
     chat_data = await db.get_chat(chat_id)
-    stats_data = await db.get_scoring_stats(chat_id, days=7)
+    good_stats = await db.get_good_users_stats(chat_id, days=7, min_samples=1)
+    scoring_stats = await db.get_scoring_stats(chat_id, days=7)
     
     chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
     
     text = f"✅ <b>Профиль успешных: {chat_name}</b>\n\n"
     
-    if stats_data['total_good_joins'] == 0:
+    if not good_stats or good_stats['total_good'] == 0:
         text += "<i>Нет данных об успешных верификациях за последние 7 дней</i>"
     else:
-        total = stats_data['total_good_joins']
+        total = good_stats['total_good']
         text += f"<b>Всего прошло верификацию за 7 дней:</b> {total}\n\n"
         
-        if stats_data['lang_counts']:
+        # Характеристики успешных юзеров
+        text += f"<b>Характеристики:</b>\n"
+        text += f"• Без username: {good_stats['no_username_rate'] * 100:.1f}%\n"
+        text += f"• Без языка: {good_stats['no_language_rate'] * 100:.1f}%\n"
+        text += f"• Premium пользователи: {good_stats.get('premium_rate', 0) * 100:.1f}%\n\n"
+        
+        # Топ языков
+        if good_stats.get('top_langs'):
             text += f"<b>Топ-5 языков:</b>\n"
-            sorted_langs = sorted(stats_data['lang_counts'].items(), key=lambda x: x[1], reverse=True)[:5]
-            for lang, count in sorted_langs:
-                text += f"• {lang}: {count} ({count / total * 100:.1f}%)\n"
+            for lang, rate in good_stats['top_langs'].items():
+                text += f"• {lang}: {rate * 100:.1f}%\n"
             text += "\n"
         
-        if stats_data['p95_id'] and stats_data['p99_id']:
+        # ID статистика
+        if scoring_stats.get('p95_id') and scoring_stats.get('p99_id'):
             text += f"<b>Статистика ID:</b>\n"
-            text += f"• 95-й перцентиль: {stats_data['p95_id'] / 1e9:.2f} млрд\n"
-            text += f"• 99-й перцентиль: {stats_data['p99_id'] / 1e9:.2f} млрд\n\n"
+            if good_stats.get('avg_user_id'):
+                text += f"• Средний ID: {good_stats['avg_user_id'] / 1e9:.2f} млрд\n"
+            text += f"• 95-й перцентиль: {scoring_stats['p95_id'] / 1e9:.2f} млрд\n"
+            text += f"• 99-й перцентиль: {scoring_stats['p99_id'] / 1e9:.2f} млрд\n\n"
         
-        text += "<i>💡 Эти данные используются для расчёта риска новых пользователей</i>"
+        text += "<i>💡 Используется для защиты от false positives при автокорректировке</i>"
     
     await callback.message.edit_text(
         text,

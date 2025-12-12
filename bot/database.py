@@ -40,7 +40,7 @@ class Database:
                 scoring_enabled BOOLEAN DEFAULT 0,
                 scoring_threshold INTEGER DEFAULT 50,
                 scoring_lang_distribution TEXT DEFAULT '{"ru": 0.8, "en": 0.2}',
-                scoring_weights TEXT DEFAULT '{"max_lang_risk": 30, "no_lang_risk": 15, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}',
+                scoring_weights TEXT DEFAULT '{"max_lang_risk": 25, "no_lang_risk": 15, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}',
                 scoring_auto_adjust BOOLEAN DEFAULT 1
             );
 
@@ -324,7 +324,7 @@ class Database:
             return {
                 'threshold': row['scoring_threshold'],
                 'lang_distribution': json.loads(row['scoring_lang_distribution']),
-                'max_lang_risk': weights.get('max_lang_risk', 30),
+                'max_lang_risk': weights.get('max_lang_risk', 25),
                 'no_lang_risk': weights.get('no_lang_risk', 15),
                 'max_id_risk': weights.get('max_id_risk', 20),
                 'premium_bonus': weights.get('premium_bonus', -20),
@@ -477,6 +477,71 @@ class Database:
                 stats['id_above_p99_rate'] = (row['count'] / total) if total > 0 else 0
         else:
             stats['id_above_p99_rate'] = 0
+        
+        return stats
+
+    async def get_good_users_stats(self, chat_id: int, days: int = 7, min_samples: int = 30) -> Optional[Dict[str, Any]]:
+        """
+        Получить характеристики успешных пользователей (прошедших верификацию).
+        Используется для защиты от false positives при автокорректировке.
+        """
+        cutoff_time = int(time.time()) - (days * 24 * 60 * 60)
+        
+        # Общее количество успешных за период
+        async with self._connection.execute('''
+            SELECT COUNT(*) as total FROM good_users
+            WHERE chat_id = ? AND joined_at >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            total = row['total'] if row else 0
+        
+        if total < min_samples:
+            return None
+        
+        stats = {'total_good': total}
+        
+        # Процент без username
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM good_users
+            WHERE chat_id = ? AND joined_at >= ? AND (username IS NULL OR username = '')
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['no_username_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Процент без языка
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM good_users
+            WHERE chat_id = ? AND joined_at >= ? AND (language_code IS NULL OR language_code = '')
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['no_language_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Процент премиум пользователей
+        async with self._connection.execute('''
+            SELECT COUNT(*) as count FROM good_users
+            WHERE chat_id = ? AND joined_at >= ? AND is_premium = 1
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['premium_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Топ-5 языков успешных юзеров
+        async with self._connection.execute('''
+            SELECT language_code, COUNT(*) as count FROM good_users
+            WHERE chat_id = ? AND joined_at >= ? AND language_code IS NOT NULL AND language_code != ''
+            GROUP BY language_code
+            ORDER BY count DESC
+            LIMIT 5
+        ''', (chat_id, cutoff_time)) as cursor:
+            rows = await cursor.fetchall()
+            stats['top_langs'] = {row['language_code']: row['count'] / total for row in rows}
+        
+        # Средний ID успешных (для сравнения с ботами)
+        async with self._connection.execute('''
+            SELECT AVG(user_id) as avg_id FROM good_users
+            WHERE chat_id = ? AND joined_at >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['avg_user_id'] = int(row['avg_id']) if row['avg_id'] else 0
         
         return stats
 

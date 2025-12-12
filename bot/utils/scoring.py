@@ -19,7 +19,7 @@ class ScoringConfig:
         Пример: {'ru': 0.8, 'en': 0.2}
     """
     lang_distribution: Dict[str, float]
-    max_lang_risk: int = 30      # максимум штрафа за редкий/неожиданный язык
+    max_lang_risk: int = 25      # максимум штрафа за редкий/неожиданный язык
     no_lang_risk: int = 15       # штраф за отсутствие языка
     max_id_risk: int = 20        # максимум штрафа за новый ID
     premium_bonus: int = -20     # сколько вычитаем за премиум
