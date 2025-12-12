@@ -490,7 +490,7 @@ class Database:
         # Общее количество успешных за период
         async with self._connection.execute('''
             SELECT COUNT(*) as total FROM good_users
-            WHERE chat_id = ? AND joined_at >= ?
+            WHERE chat_id = ? AND verified_at >= ?
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
             total = row['total'] if row else 0
@@ -503,7 +503,7 @@ class Database:
         # Процент без username
         async with self._connection.execute('''
             SELECT COUNT(*) as count FROM good_users
-            WHERE chat_id = ? AND joined_at >= ? AND (username IS NULL OR username = '')
+            WHERE chat_id = ? AND verified_at >= ? AND (username IS NULL OR username = '')
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
             stats['no_username_rate'] = (row['count'] / total) if total > 0 else 0
@@ -511,7 +511,7 @@ class Database:
         # Процент без языка
         async with self._connection.execute('''
             SELECT COUNT(*) as count FROM good_users
-            WHERE chat_id = ? AND joined_at >= ? AND (language_code IS NULL OR language_code = '')
+            WHERE chat_id = ? AND verified_at >= ? AND (language_code IS NULL OR language_code = '')
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
             stats['no_language_rate'] = (row['count'] / total) if total > 0 else 0
@@ -519,7 +519,7 @@ class Database:
         # Процент премиум пользователей
         async with self._connection.execute('''
             SELECT COUNT(*) as count FROM good_users
-            WHERE chat_id = ? AND joined_at >= ? AND is_premium = 1
+            WHERE chat_id = ? AND verified_at >= ? AND is_premium = 1
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
             stats['premium_rate'] = (row['count'] / total) if total > 0 else 0
@@ -527,7 +527,7 @@ class Database:
         # Топ-5 языков успешных юзеров
         async with self._connection.execute('''
             SELECT language_code, COUNT(*) as count FROM good_users
-            WHERE chat_id = ? AND joined_at >= ? AND language_code IS NOT NULL AND language_code != ''
+            WHERE chat_id = ? AND verified_at >= ? AND language_code IS NOT NULL AND language_code != ''
             GROUP BY language_code
             ORDER BY count DESC
             LIMIT 5
@@ -538,7 +538,7 @@ class Database:
         # Средний ID успешных (для сравнения с ботами)
         async with self._connection.execute('''
             SELECT AVG(user_id) as avg_id FROM good_users
-            WHERE chat_id = ? AND joined_at >= ?
+            WHERE chat_id = ? AND verified_at >= ?
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
             stats['avg_user_id'] = int(row['avg_id']) if row['avg_id'] else 0
