@@ -102,6 +102,21 @@ async def migrate():
             print("✅ scoring_auto_adjust добавлен")
         else:
             print("✓ scoring_auto_adjust уже есть")
+        
+        # === СВЯЗАННЫЙ ЧАТ (для каналов) ===
+        if 'use_linked_chat_scoring' not in column_names:
+            print("➕ Добавляем use_linked_chat_scoring...")
+            await db.execute('ALTER TABLE chats ADD COLUMN use_linked_chat_scoring BOOLEAN DEFAULT 0')
+            print("✅ use_linked_chat_scoring добавлен")
+        else:
+            print("✓ use_linked_chat_scoring уже есть")
+        
+        if 'linked_chat_id' not in column_names:
+            print("➕ Добавляем linked_chat_id...")
+            await db.execute('ALTER TABLE chats ADD COLUMN linked_chat_id INTEGER')
+            print("✅ linked_chat_id добавлен")
+        else:
+            print("✓ linked_chat_id уже есть")
 
         # === ТАБЛИЦЫ ===
         print("\n📋 Проверка и создание таблиц...")

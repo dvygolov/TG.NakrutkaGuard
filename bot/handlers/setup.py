@@ -156,7 +156,7 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKeyboardMarkup:
+def get_chat_settings_keyboard(chat_id: int, is_group: bool = True, has_linked_chat: bool = False) -> InlineKeyboardMarkup:
     """Клавиатура настроек конкретного чата"""
     buttons = [
         [
@@ -167,6 +167,10 @@ def get_chat_settings_keyboard(chat_id: int, is_group: bool = True) -> InlineKey
         [InlineKeyboardButton(text="🎯 Скоринг", callback_data=f"toggle_scoring_{chat_id}")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data=f"stats_menu_{chat_id}")],
     ]
+    
+    # Для каналов со связанным чатом - опция использования скоринга чата
+    if not is_group and has_linked_chat:
+        buttons.append([InlineKeyboardButton(text="🔗 Скоринг связанного чата", callback_data=f"toggle_linked_scoring_{chat_id}")])
     
     # Капча и другие функции только для групп (не для каналов)
     if is_group:
@@ -470,6 +474,8 @@ async def list_chats(callback: CallbackQuery):
 
 async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
     """Внутренняя функция для отображения настроек чата"""
+    from bot.utils.telegram_helper import get_linked_chat_id
+    
     chat_data = await db.get_chat(chat_id)
     
     if not chat_data:
@@ -479,6 +485,10 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
     # Определяем тип чата
     is_group = await _is_group_chat(callback.bot, chat_id)
     
+    # Проверяем есть ли linked chat
+    linked_chat_id = await get_linked_chat_id(callback.bot, chat_id)
+    has_linked_chat = linked_chat_id is not None
+    
     status = "🟢 АКТИВЕН" if chat_data['protection_active'] else "⚪️ ВЫКЛЮЧЕН"
     premium = "✅ Да" if chat_data['protect_premium'] else "❌ Нет"
     captcha = "✅ Да" if chat_data.get('captcha_enabled', False) else "❌ Нет"
@@ -487,6 +497,12 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
     scoring_enabled = chat_data.get('scoring_enabled', False)
     scoring_threshold = chat_data.get('scoring_threshold', 50)
     scoring = f"✅ Да, порог {scoring_threshold}" if scoring_enabled else "❌ Нет"
+    
+    # Информация о связанном чате (для каналов)
+    if not is_group and has_linked_chat:
+        use_linked = chat_data.get('use_linked_chat_scoring', False)
+        if use_linked:
+            scoring += f"\n   🔗 Использует скоринг чата (ID: {linked_chat_id})"
     
     text = (
         f"⚙️ <b>Настройки чата</b>\n\n"
@@ -516,7 +532,7 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
     
     await callback.message.edit_text(
         text,
-        reply_markup=get_chat_settings_keyboard(chat_id, is_group),
+        reply_markup=get_chat_settings_keyboard(chat_id, is_group, has_linked_chat),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -542,6 +558,43 @@ async def toggle_premium_protection(callback: CallbackQuery):
         f"✅ Premium защита: {'Включена' if new_value else 'Выключена'}",
         show_alert=True
     )
+    await _show_chat_settings_message(callback, chat_id)
+
+
+@router.callback_query(F.data.startswith("toggle_linked_scoring_"))
+async def toggle_linked_scoring(callback: CallbackQuery):
+    """Переключить использование скоринга связанного чата"""
+    from bot.utils.telegram_helper import get_linked_chat_id
+    
+    chat_id = int(callback.data.split("_")[3])
+    
+    # Получаем linked_chat_id через API
+    linked_chat_id = await get_linked_chat_id(callback.bot, chat_id)
+    
+    if not linked_chat_id:
+        await callback.answer("❌ Связанный чат не найден", show_alert=True)
+        return
+    
+    # Получаем текущее состояние
+    linked_info = await db.get_linked_chat_info(chat_id)
+    current_value = linked_info.get('use_linked_chat_scoring', False) if linked_info else False
+    
+    new_value = not current_value
+    
+    # Обновляем настройки
+    await db.set_linked_chat_scoring(chat_id, new_value, linked_chat_id if new_value else None)
+    
+    if new_value:
+        await callback.answer(
+            f"✅ Канал теперь использует скоринг чата (ID: {linked_chat_id})",
+            show_alert=True
+        )
+    else:
+        await callback.answer(
+            "✅ Канал использует собственный скоринг",
+            show_alert=True
+        )
+    
     await _show_chat_settings_message(callback, chat_id)
 
 

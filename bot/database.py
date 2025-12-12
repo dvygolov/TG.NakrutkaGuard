@@ -41,7 +41,9 @@ class Database:
                 scoring_threshold INTEGER DEFAULT 50,
                 scoring_lang_distribution TEXT DEFAULT '{"ru": 0.8, "en": 0.2}',
                 scoring_weights TEXT DEFAULT '{"max_lang_risk": 25, "no_lang_risk": 15, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}',
-                scoring_auto_adjust BOOLEAN DEFAULT 1
+                scoring_auto_adjust BOOLEAN DEFAULT 1,
+                use_linked_chat_scoring BOOLEAN DEFAULT 0,
+                linked_chat_id INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS attack_sessions (
@@ -306,17 +308,44 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return bool(row['scoring_enabled']) if row else False
+    
+    async def set_linked_chat_scoring(self, chat_id: int, enabled: bool, linked_chat_id: Optional[int] = None):
+        """Включить/выключить использование скоринга связанного чата"""
+        await self._connection.execute('''
+            UPDATE chats SET use_linked_chat_scoring = ?, linked_chat_id = ?
+            WHERE chat_id = ?
+        ''', (enabled, linked_chat_id, chat_id))
+        await self._connection.commit()
+    
+    async def get_linked_chat_info(self, chat_id: int) -> Optional[Dict[str, Any]]:
+        """Получить информацию о связанном чате"""
+        async with self._connection.execute('''
+            SELECT use_linked_chat_scoring, linked_chat_id FROM chats WHERE chat_id = ?
+        ''', (chat_id,)) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return {
+                'use_linked_chat_scoring': bool(row['use_linked_chat_scoring']),
+                'linked_chat_id': row['linked_chat_id']
+            }
 
     async def get_scoring_config(self, chat_id: int) -> Optional[Dict[str, Any]]:
-        """Получить конфигурацию скоринга для чата со всеми весами"""
+        """Получить конфиг скоринга для чата/канала"""
         async with self._connection.execute('''
-            SELECT scoring_threshold, scoring_lang_distribution, 
-                   scoring_weights, scoring_auto_adjust
+            SELECT scoring_threshold, scoring_lang_distribution, scoring_weights, scoring_auto_adjust,
+                   use_linked_chat_scoring, linked_chat_id
             FROM chats WHERE chat_id = ?
         ''', (chat_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
                 return None
+            
+            # Если канал использует скоринг связанного чата
+            if row['use_linked_chat_scoring'] and row['linked_chat_id']:
+                logger.info(f"Chat {chat_id}: использует скоринг из связанного чата {row['linked_chat_id']}")
+                # Рекурсивно получаем конфиг из связанного чата
+                return await self.get_scoring_config(row['linked_chat_id'])
             
             # Парсим веса из JSON
             weights = json.loads(row['scoring_weights']) if row['scoring_weights'] else {}
