@@ -156,6 +156,28 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def get_scoring_menu_keyboard(chat_id: int, is_group: bool = True, has_linked_chat: bool = False, 
+                               scoring_enabled: bool = False) -> InlineKeyboardMarkup:
+    """Подменю настроек скоринга"""
+    buttons = []
+    
+    # Вкл/Выкл скоринга
+    if scoring_enabled:
+        buttons.append([InlineKeyboardButton(text="❌ Выключить скоринг", callback_data=f"scoring_disable_{chat_id}")])
+        buttons.append([InlineKeyboardButton(text="⚙️ Изменить порог", callback_data=f"scoring_set_threshold_{chat_id}")])
+    else:
+        buttons.append([InlineKeyboardButton(text="✅ Включить скоринг", callback_data=f"scoring_enable_{chat_id}")])
+    
+    # Для каналов со связанным чатом - опция использования скоринга чата
+    if not is_group and has_linked_chat and scoring_enabled:
+        buttons.append([InlineKeyboardButton(text="🔗 Скоринг связанного чата", callback_data=f"toggle_linked_scoring_{chat_id}")])
+    
+    # Назад
+    buttons.append([InlineKeyboardButton(text="◀️ Назад к настройкам", callback_data=f"chat_{chat_id}")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_chat_settings_keyboard(chat_id: int, is_group: bool = True, has_linked_chat: bool = False) -> InlineKeyboardMarkup:
     """Клавиатура настроек конкретного чата"""
     buttons = [
@@ -167,10 +189,6 @@ def get_chat_settings_keyboard(chat_id: int, is_group: bool = True, has_linked_c
         [InlineKeyboardButton(text="🎯 Скоринг", callback_data=f"toggle_scoring_{chat_id}")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data=f"stats_menu_{chat_id}")],
     ]
-    
-    # Для каналов со связанным чатом - опция использования скоринга чата
-    if not is_group and has_linked_chat:
-        buttons.append([InlineKeyboardButton(text="🔗 Скоринг связанного чата", callback_data=f"toggle_linked_scoring_{chat_id}")])
     
     # Капча и другие функции только для групп (не для каналов)
     if is_group:
@@ -599,30 +617,114 @@ async def toggle_linked_scoring(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("toggle_scoring_"))
-async def toggle_scoring(callback: CallbackQuery, state: FSMContext):
-    """Переключить скоринг"""
+async def toggle_scoring(callback: CallbackQuery):
+    """Открыть меню настроек скоринга"""
+    from bot.utils.telegram_helper import get_linked_chat_id
+    
     chat_id = int(callback.data.split("_")[2])
     chat_data = await db.get_chat(chat_id)
     
-    new_value = not chat_data.get('scoring_enabled', False)
+    if not chat_data:
+        await callback.answer("❌ Чат не найден", show_alert=True)
+        return
     
-    if new_value:
-        # Включаем - запрашиваем порог
-        await state.update_data(chat_id=chat_id)
-        await callback.message.edit_text(
-            "🎯 <b>Включение скоринга</b>\n\n"
-            "Отправьте порог скоринга (0-100):\n"
-            "Юзеры со score > порога будут кикнуты.\n\n"
-            "Например: 50 (рекомендуется)",
-            parse_mode="HTML"
-        )
-        await state.set_state(ChangeSettingsStates.waiting_for_scoring_threshold)
-        await callback.answer()
+    # Определяем тип чата и linked chat
+    is_group = await _is_group_chat(callback.bot, chat_id)
+    linked_chat_id = await get_linked_chat_id(callback.bot, chat_id)
+    has_linked_chat = linked_chat_id is not None
+    
+    scoring_enabled = chat_data.get('scoring_enabled', False)
+    scoring_threshold = chat_data.get('scoring_threshold', 50)
+    
+    # Формируем текст
+    text = f"🎯 <b>Настройки скоринга</b>\n\n"
+    text += f"📝 Чат: {chat_data['title']}\n\n"
+    
+    if scoring_enabled:
+        text += f"✅ Скоринг <b>включен</b>\n"
+        text += f"📊 Порог: <b>{scoring_threshold}</b>\n\n"
+        
+        # Информация о linked chat
+        if not is_group and has_linked_chat:
+            use_linked = chat_data.get('use_linked_chat_scoring', False)
+            if use_linked:
+                text += f"🔗 Использует скоринг связанного чата (ID: {linked_chat_id})\n\n"
+            else:
+                text += f"📌 Собственный скоринг канала\n\n"
+        
+        text += "Юзеры со скором выше порога будут кикнуты."
     else:
-        # Выключаем - просто выключаем
-        await db.update_chat_settings(chat_id, scoring_enabled=False)
-        await callback.answer("✅ Скоринг выключен", show_alert=True)
-        await _show_chat_settings_message(callback, chat_id)
+        text += "❌ Скоринг <b>выключен</b>\n\n"
+        text += "Включите скоринг для автоматической фильтрации ботов."
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_scoring_menu_keyboard(chat_id, is_group, has_linked_chat, scoring_enabled),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("scoring_enable_"))
+async def scoring_enable(callback: CallbackQuery, state: FSMContext):
+    """Включить скоринг - запросить порог"""
+    chat_id = int(callback.data.split("_")[2])
+    
+    await state.update_data(chat_id=chat_id)
+    await callback.message.edit_text(
+        "🎯 <b>Включение скоринга</b>\n\n"
+        "Отправьте порог скоринга (0-100):\n"
+        "Юзеры со score > порога будут кикнуты.\n\n"
+        "Например: 50 (рекомендуется)",
+        parse_mode="HTML"
+    )
+    await state.set_state(ChangeSettingsStates.waiting_for_scoring_threshold)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("scoring_disable_"))
+async def scoring_disable(callback: CallbackQuery):
+    """Выключить скоринг"""
+    from bot.utils.telegram_helper import get_linked_chat_id
+    
+    chat_id = int(callback.data.split("_")[2])
+    
+    await db.update_chat_settings(chat_id, scoring_enabled=False)
+    await callback.answer("✅ Скоринг выключен", show_alert=True)
+    
+    # Возвращаемся в меню скоринга
+    chat_data = await db.get_chat(chat_id)
+    is_group = await _is_group_chat(callback.bot, chat_id)
+    linked_chat_id = await get_linked_chat_id(callback.bot, chat_id)
+    has_linked_chat = linked_chat_id is not None
+    
+    text = f"🎯 <b>Настройки скоринга</b>\n\n"
+    text += f"📝 Чат: {chat_data['title']}\n\n"
+    text += "❌ Скоринг <b>выключен</b>\n\n"
+    text += "Включите скоринг для автоматической фильтрации ботов."
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_scoring_menu_keyboard(chat_id, is_group, has_linked_chat, False),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("scoring_set_threshold_"))
+async def scoring_set_threshold(callback: CallbackQuery, state: FSMContext):
+    """Изменить порог скоринга"""
+    chat_id = int(callback.data.split("_")[3])
+    
+    await state.update_data(chat_id=chat_id)
+    await callback.message.edit_text(
+        "🎯 <b>Изменение порога скоринга</b>\n\n"
+        "Отправьте новый порог скоринга (0-100):\n"
+        "Юзеры со score > порога будут кикнуты.\n\n"
+        "Например: 50 (рекомендуется)",
+        parse_mode="HTML"
+    )
+    await state.set_state(ChangeSettingsStates.waiting_for_scoring_threshold)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("toggle_captcha_"))
@@ -761,8 +863,10 @@ async def process_window(message: Message, state: FSMContext):
 
 
 @router.message(ChangeSettingsStates.waiting_for_scoring_threshold)
-async def process_scoring_threshold(message: Message, state: FSMContext):
+async def process_scoring_threshold(message: Message, state: FSMContext, bot: Bot):
     """Обработать новый порог скоринга"""
+    from bot.utils.telegram_helper import get_linked_chat_id
+    
     if not is_admin(message.from_user.id):
         return
     
@@ -780,9 +884,28 @@ async def process_scoring_threshold(message: Message, state: FSMContext):
     
     # Обновляем порог и включаем скоринг
     await db.update_chat_settings(chat_id, scoring_threshold=threshold, scoring_enabled=True)
+    
+    # Получаем данные для правильного отображения меню
+    chat_data = await db.get_chat(chat_id)
+    is_group = await _is_group_chat(bot, chat_id)
+    linked_chat_id = await get_linked_chat_id(bot, chat_id)
+    has_linked_chat = linked_chat_id is not None
+    
+    # Формируем текст меню скоринга
+    text = f"🎯 <b>Настройки скоринга</b>\n\n"
+    text += f"📝 Чат: {chat_data['title']}\n\n"
+    text += f"✅ Скоринг <b>включен</b>\n"
+    text += f"📊 Порог: <b>{threshold}</b>\n\n"
+    
+    if not is_group and has_linked_chat:
+        text += f"📌 Собственный скоринг канала\n\n"
+    
+    text += "Юзеры со скором выше порога будут кикнуты."
+    
     await message.answer(
-        f"✅ Скоринг включен с порогом {threshold}",
-        reply_markup=get_chat_settings_keyboard(chat_id)
+        text,
+        reply_markup=get_scoring_menu_keyboard(chat_id, is_group, has_linked_chat, True),
+        parse_mode="HTML"
     )
     
     await state.clear()
