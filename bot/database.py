@@ -480,6 +480,18 @@ class Database:
         
         return stats
 
+    async def clear_good_users(self, chat_id: int) -> int:
+        """
+        Очистить профиль успешных пользователей для чата.
+        Возвращает количество удалённых записей.
+        """
+        async with self._connection.execute('''
+            DELETE FROM good_users WHERE chat_id = ?
+        ''', (chat_id,)) as cursor:
+            deleted_count = cursor.rowcount
+        await self._connection.commit()
+        return deleted_count
+
     async def get_good_users_stats(self, chat_id: int, days: int = 7, min_samples: int = 30) -> Optional[Dict[str, Any]]:
         """
         Получить характеристики успешных пользователей (прошедших верификацию).

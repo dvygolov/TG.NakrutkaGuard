@@ -1,12 +1,16 @@
+"""Handlers для отображения статистики чата"""
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+
 from bot.database import db
+from bot.handlers import statistics_clear
 
 router = Router()
+router.include_router(statistics_clear.router)
 
 
 def get_statistics_menu_keyboard(chat_id: int) -> InlineKeyboardMarkup:
-    """Меню статистики с 5 разделами"""
+    """Клавиатура меню статистики"""
     buttons = [
         [InlineKeyboardButton(text="⚙️ Текущие настройки", callback_data=f"stats_settings_{chat_id}")],
         [InlineKeyboardButton(text="📈 Эффективность защиты", callback_data=f"stats_effectiveness_{chat_id}")],
@@ -297,11 +301,17 @@ async def show_success_profile(callback: CallbackQuery):
         
         text += "<i>💡 Используется для защиты от false positives при автокорректировке</i>"
     
+    buttons = [
+        [InlineKeyboardButton(text="◀️ Назад к статистике", callback_data=f"stats_menu_{chat_id}")]
+    ]
+    
+    # Добавляем кнопку очистки только если есть данные
+    if good_stats and good_stats['total_good'] > 0:
+        buttons.insert(0, [InlineKeyboardButton(text="🗑 Очистить профиль", callback_data=f"clear_good_confirm_{chat_id}")])
+    
     await callback.message.edit_text(
         text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад к статистике", callback_data=f"stats_menu_{chat_id}")]
-        ]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         parse_mode="HTML"
     )
     await callback.answer()
