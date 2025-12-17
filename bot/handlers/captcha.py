@@ -20,8 +20,8 @@ router = Router()
 
 async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
     """
-    Логировать характеристики пользователя, не прошедшего капчу.
-    Используется для автоматической корректировки весов скоринга.
+    Логировать пользователя, не прошедшего капчу.
+    Сохраняет полные данные для экспериментов с корректировкой скоринга.
     """
     try:
         # Получаем информацию о пользователе
@@ -35,11 +35,6 @@ async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
             photo_count = photos.total_count
         except Exception:
             pass
-        
-        # Анализируем имя
-        full_name = user_obj.full_name or ""
-        name_has_latin_cyrillic = bool(LATIN_CYRILLIC_REGEX.search(full_name))
-        name_has_arabic_cjk = bool(ARABIC_CJK_REGEX.search(full_name))
         
         # Вычисляем скор, который был у этого пользователя
         scoring_score = 0
@@ -66,25 +61,25 @@ async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
                 )
                 scoring_score = score_user(user_obj, photo_count=photo_count, cfg=cfg, stats=stats)
             except Exception as e:
-                logger.warning(f"Не удалось вычислить скор для failed captcha user {user_id}: {e}")
+                logger.warning(f"Не удалось вычислить скор для failed user {user_id}: {e}")
         
-        # Сохраняем в БД
-        await db.log_failed_captcha_features(
+        # Сохраняем в БД (идентичная структура с good_users для экспериментов)
+        await db.add_failed_user(
             chat_id=chat_id,
             user_id=user_id,
+            first_name=user_obj.first_name,
+            last_name=user_obj.last_name,
+            username=user_obj.username,
             language_code=user_obj.language_code,
-            has_username=bool(user_obj.username),
-            photo_count=photo_count,
-            name_has_latin_cyrillic=name_has_latin_cyrillic,
-            name_has_arabic_cjk=name_has_arabic_cjk,
             is_premium=user_obj.is_premium or False,
+            photo_count=photo_count,
             scoring_score=scoring_score
         )
         
-        logger.info(f"Logged failed captcha for user {user_id} in chat {chat_id}: score={scoring_score}")
+        logger.info(f"Logged failed user {user_id} in chat {chat_id}: score={scoring_score}, photos={photo_count}")
         
     except Exception as e:
-        logger.error(f"Ошибка логирования failed captcha для user {user_id}: {e}")
+        logger.error(f"Ошибка логирования failed user {user_id}: {e}")
 
 
 def _format_welcome_text(template: str, user: Union[Message, CallbackQuery]) -> str:
@@ -277,11 +272,42 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
         # Добавляем в good_users для статистики скоринга
         try:
             user = callback.from_user
+            
+            # Получаем photo_count
+            photo_count = 0
+            try:
+                photos = await bot.get_user_profile_photos(user_id, limit=100)
+                photo_count = photos.total_count
+            except Exception as e:
+                logger.warning(f"Не удалось получить фото для {user_id}: {e}")
+            
+            # Вычисляем скор для статистики
+            scoring_score = 0
+            try:
+                scoring_config_data = await db.get_scoring_config(chat_id)
+                if scoring_config_data:
+                    stats_data = await db.get_scoring_stats(chat_id, days=7)
+                    
+                    cfg = ScoringConfig(**scoring_config_data)
+                    stats = ScoringStats(
+                        lang_counts=stats_data['lang_counts'],
+                        total_good_joins=stats_data['total_good_joins'],
+                        p95_id=stats_data['p95_id'],
+                        p99_id=stats_data['p99_id']
+                    )
+                    
+                    scoring_score = score_user(user, photo_count=photo_count, cfg=cfg, stats=stats)
+            except Exception as e:
+                logger.error(f"Не удалось вычислить скор для good_user {user_id}: {e}")
+            
             await db.add_good_user(
-                chat_id, user.id, user.username,
-                user.language_code, user.is_premium or False
+                chat_id, user.id,
+                user.first_name, user.last_name, user.username,
+                user.language_code, user.is_premium or False,
+                photo_count,
+                scoring_score=scoring_score
             )
-            print(f"[CAPTCHA] User={user_id} добавлен в good_users для статистики")
+            print(f"[CAPTCHA] User={user_id} добавлен в good_users (score={scoring_score}, photos={photo_count})")
         except Exception as e:
             print(f"[CAPTCHA] Не удалось добавить в good_users: {e}")
 

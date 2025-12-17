@@ -125,8 +125,11 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                     # (если капча включена - добавим после её прохождения)
                     if not captcha_enabled:
                         await db.add_good_user(
-                            chat.id, user.id, user.username,
-                            user.language_code, user.is_premium or False
+                            chat.id, user.id,
+                            user.first_name, user.last_name, user.username,
+                            user.language_code, user.is_premium or False,
+                            photo_count,
+                            scoring_score=risk_score
                         )
                     logger.info(
                         f"Юзер {user.id} прошёл скоринг: score={risk_score} <= threshold={scoring_config_data['threshold']}"

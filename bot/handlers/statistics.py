@@ -291,6 +291,28 @@ async def show_success_profile(callback: CallbackQuery):
                 text += f"• {lang}: {rate * 100:.1f}%\n"
             text += "\n"
         
+        # Скоринг
+        avg_good_score = good_stats.get('avg_score', 0)
+        text += f"<b>Средний скор:</b> {avg_good_score}\n"
+        
+        # Сравнение с провалами капчи
+        failed_stats = await db.get_failed_captcha_stats(chat_id, days=7, min_samples=1)
+        if failed_stats:
+            avg_failed_score = failed_stats.get('avg_failed_score', 0)
+            diff = avg_failed_score - avg_good_score
+            
+            text += f"<b>Средний скор провалов:</b> {avg_failed_score}\n"
+            text += f"<b>Разница:</b> {diff:+d} 📊\n\n"
+            
+            if diff > 20:
+                text += "✅ <i>Отличное разделение! Скоринг работает эффективно</i>\n\n"
+            elif diff > 10:
+                text += "⚠️ <i>Неплохо, но можно улучшить автокорректировкой</i>\n\n"
+            else:
+                text += "🔴 <i>Слабое разделение! Рекомендуется включить автокорректировку</i>\n\n"
+        else:
+            text += "\n"
+        
         # ID статистика
         if scoring_stats.get('p95_id') and scoring_stats.get('p99_id'):
             text += f"<b>Статистика ID:</b>\n"

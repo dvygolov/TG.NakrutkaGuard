@@ -82,9 +82,13 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
+                first_name TEXT,
+                last_name TEXT,
                 username TEXT,
                 language_code TEXT,
                 is_premium BOOLEAN DEFAULT 0,
+                photo_count INTEGER DEFAULT 0,
+                scoring_score INTEGER DEFAULT 0,
                 verified_at INTEGER NOT NULL,
                 FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
             );
@@ -92,22 +96,22 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_good_users_chat ON good_users(chat_id, verified_at);
             CREATE INDEX IF NOT EXISTS idx_good_users_lookup ON good_users(chat_id, user_id);
 
-            CREATE TABLE IF NOT EXISTS failed_captcha_features (
+            CREATE TABLE IF NOT EXISTS failed_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
+                first_name TEXT,
+                last_name TEXT,
+                username TEXT,
                 language_code TEXT,
-                has_username BOOLEAN,
-                photo_count INTEGER,
-                name_has_latin_cyrillic BOOLEAN,
-                name_has_arabic_cjk BOOLEAN,
-                is_premium BOOLEAN,
-                scoring_score INTEGER,
+                is_premium BOOLEAN DEFAULT 0,
+                photo_count INTEGER DEFAULT 0,
+                scoring_score INTEGER DEFAULT 0,
                 failed_at INTEGER NOT NULL,
                 FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_failed_captcha_chat ON failed_captcha_features(chat_id, failed_at);
+            CREATE INDEX IF NOT EXISTS idx_failed_users_chat ON failed_users(chat_id, failed_at);
         ''')
         await self._connection.commit()
 
@@ -368,39 +372,46 @@ class Database:
                 'auto_adjust': bool(row['scoring_auto_adjust'])
             }
 
-    async def add_good_user(self, chat_id: int, user_id: int, username: Optional[str],
-                           language_code: Optional[str], is_premium: bool):
+    async def add_good_user(self, chat_id: int, user_id: int, 
+                           first_name: Optional[str], last_name: Optional[str],
+                           username: Optional[str], language_code: Optional[str], 
+                           is_premium: bool, photo_count: int,
+                           scoring_score: int = 0):
         """Добавить пользователя в список прошедших верификацию (для статистики)"""
         await self._connection.execute('''
-            INSERT INTO good_users (chat_id, user_id, username, language_code, is_premium, verified_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (chat_id, user_id, username, language_code, is_premium, int(time.time())))
+            INSERT INTO good_users (
+                chat_id, user_id, first_name, last_name, username, language_code, 
+                is_premium, photo_count, scoring_score, verified_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (chat_id, user_id, first_name, last_name, username, language_code, 
+              is_premium, photo_count, scoring_score, int(time.time())))
         await self._connection.commit()
 
-    async def log_failed_captcha_features(self, chat_id: int, user_id: int, 
-                                           language_code: Optional[str], has_username: bool,
-                                           photo_count: int, name_has_latin_cyrillic: bool,
-                                           name_has_arabic_cjk: bool, is_premium: bool,
-                                           scoring_score: int):
-        """Записать характеристики пользователя, не прошедшего капчу"""
+    async def add_failed_user(self, chat_id: int, user_id: int,
+                             first_name: Optional[str], last_name: Optional[str],
+                             username: Optional[str], language_code: Optional[str],
+                             is_premium: bool, photo_count: int,
+                             scoring_score: int = 0):
+        """Добавить пользователя, не прошедшего капчу (для статистики и экспериментов)"""
         await self._connection.execute('''
-            INSERT INTO failed_captcha_features 
-            (chat_id, user_id, language_code, has_username, photo_count, 
-             name_has_latin_cyrillic, name_has_arabic_cjk, is_premium, scoring_score, failed_at)
+            INSERT INTO failed_users (
+                chat_id, user_id, first_name, last_name, username, language_code,
+                is_premium, photo_count, scoring_score, failed_at
+            )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (chat_id, user_id, language_code, has_username, photo_count,
-              name_has_latin_cyrillic, name_has_arabic_cjk, is_premium, scoring_score,
-              int(time.time())))
+        ''', (chat_id, user_id, first_name, last_name, username, language_code,
+              is_premium, photo_count, scoring_score, int(time.time())))
         await self._connection.commit()
     
     async def get_failed_captcha_stats(self, chat_id: int, days: int = 7, 
                                        min_samples: int = 30) -> Optional[Dict[str, Any]]:
-        """Получить статистику неудачных капч для автокорректировки"""
+        """Получить статистику неудачных пользователей для автокорректировки"""
         cutoff_time = int(time.time()) - (days * 24 * 60 * 60)
         
         # Проверяем достаточно ли данных
         async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM failed_captcha_features
+            SELECT COUNT(*) as count FROM failed_users
             WHERE chat_id = ? AND failed_at >= ?
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
@@ -414,31 +425,37 @@ class Database:
         
         # Процент без username
         async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM failed_captcha_features
-            WHERE chat_id = ? AND failed_at >= ? AND has_username = 0
+            SELECT COUNT(*) as count FROM failed_users
+            WHERE chat_id = ? AND failed_at >= ? AND (username IS NULL OR username = '')
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
             stats['no_username_rate'] = (row['count'] / total) if total > 0 else 0
         
-        # Процент с арабскими/CJK
-        async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM failed_captcha_features
-            WHERE chat_id = ? AND failed_at >= ? AND name_has_arabic_cjk = 1
-        ''', (chat_id, cutoff_time)) as cursor:
-            row = await cursor.fetchone()
-            stats['arabic_cjk_rate'] = (row['count'] / total) if total > 0 else 0
+        # Вычисляем характеристики имени на лету
+        import re
+        LATIN_CYRILLIC_RE = re.compile(r"[A-Za-zА-Яа-я]")
+        ARABIC_CJK_RE = re.compile(r"[\u0600-\u06FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]")
         
-        # Процент без латиницы/кириллицы
         async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM failed_captcha_features
-            WHERE chat_id = ? AND failed_at >= ? AND name_has_latin_cyrillic = 0
+            SELECT first_name, last_name FROM failed_users
+            WHERE chat_id = ? AND failed_at >= ?
         ''', (chat_id, cutoff_time)) as cursor:
-            row = await cursor.fetchone()
-            stats['weird_name_rate'] = (row['count'] / total) if total > 0 else 0
+            rows = await cursor.fetchall()
+            arabic_cjk_count = 0
+            weird_name_count = 0
+            for row in rows:
+                full_name = f"{row['first_name'] or ''} {row['last_name'] or ''}".strip()
+                if ARABIC_CJK_RE.search(full_name):
+                    arabic_cjk_count += 1
+                if not LATIN_CYRILLIC_RE.search(full_name):
+                    weird_name_count += 1
+            
+            stats['arabic_cjk_rate'] = (arabic_cjk_count / total) if total > 0 else 0
+            stats['weird_name_rate'] = (weird_name_count / total) if total > 0 else 0
         
         # Распределение по photo_count
         async with self._connection.execute('''
-            SELECT photo_count, COUNT(*) as count FROM failed_captcha_features
+            SELECT photo_count, COUNT(*) as count FROM failed_users
             WHERE chat_id = ? AND failed_at >= ?
             GROUP BY photo_count
         ''', (chat_id, cutoff_time)) as cursor:
@@ -449,7 +466,7 @@ class Database:
         
         # Топ языков неудачников
         async with self._connection.execute('''
-            SELECT language_code, COUNT(*) as count FROM failed_captcha_features
+            SELECT language_code, COUNT(*) as count FROM failed_users
             WHERE chat_id = ? AND failed_at >= ? AND language_code IS NOT NULL
             GROUP BY language_code
             ORDER BY count DESC
@@ -460,7 +477,7 @@ class Database:
         
         # Средний scoring_score среди неудачников
         async with self._connection.execute('''
-            SELECT AVG(scoring_score) as avg_score FROM failed_captcha_features
+            SELECT AVG(scoring_score) as avg_score FROM failed_users
             WHERE chat_id = ? AND failed_at >= ?
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
@@ -468,7 +485,7 @@ class Database:
         
         # Процент без языка
         async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM failed_captcha_features
+            SELECT COUNT(*) as count FROM failed_users
             WHERE chat_id = ? AND failed_at >= ? AND (language_code IS NULL OR language_code = '')
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
@@ -477,7 +494,7 @@ class Database:
         # Процент новых ID (юзер ID > 8 млрд = зарегистрирован недавно, примерно)
         # Для более точного анализа нужно сравнивать с p95 из good_users
         async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM failed_captcha_features
+            SELECT COUNT(*) as count FROM failed_users
             WHERE chat_id = ? AND failed_at >= ? AND user_id > 8000000000
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
@@ -491,7 +508,7 @@ class Database:
         if p95:
             # Процент ботов с ID > p95
             async with self._connection.execute('''
-                SELECT COUNT(*) as count FROM failed_captcha_features
+                SELECT COUNT(*) as count FROM failed_users
                 WHERE chat_id = ? AND failed_at >= ? AND user_id > ?
             ''', (chat_id, cutoff_time, p95)) as cursor:
                 row = await cursor.fetchone()
@@ -502,7 +519,7 @@ class Database:
         if p99:
             # Процент ботов с ID > p99
             async with self._connection.execute('''
-                SELECT COUNT(*) as count FROM failed_captcha_features
+                SELECT COUNT(*) as count FROM failed_users
                 WHERE chat_id = ? AND failed_at >= ? AND user_id > ?
             ''', (chat_id, cutoff_time, p99)) as cursor:
                 row = await cursor.fetchone()
@@ -587,6 +604,14 @@ class Database:
             row = await cursor.fetchone()
             stats['avg_user_id'] = int(row['avg_id']) if row['avg_id'] else 0
         
+        # Средний scoring score успешных
+        async with self._connection.execute('''
+            SELECT AVG(scoring_score) as avg_score FROM good_users
+            WHERE chat_id = ? AND verified_at >= ?
+        ''', (chat_id, cutoff_time)) as cursor:
+            row = await cursor.fetchone()
+            stats['avg_score'] = int(row['avg_score']) if row['avg_score'] else 0
+        
         return stats
 
     async def get_protection_effectiveness(self, chat_id: int, days: int = 7) -> Dict[str, Any]:
@@ -605,7 +630,7 @@ class Database:
         
         # Кол-во провалов капчи
         async with self._connection.execute('''
-            SELECT COUNT(*) as count FROM failed_captcha_features
+            SELECT COUNT(*) as count FROM failed_users
             WHERE chat_id = ? AND failed_at >= ?
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
