@@ -91,10 +91,25 @@ async def migrate():
         if 'scoring_weights' not in column_names:
             print("➕ Добавляем scoring_weights (JSON)...")
             await db.execute('''ALTER TABLE chats ADD COLUMN scoring_weights TEXT 
-                DEFAULT '{"max_lang_risk": 25, "no_lang_risk": 15, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}' ''')
+                DEFAULT '{"max_lang_risk": 25, "no_lang_risk": 15, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25, "random_username_risk": 10}' ''')
             print("✅ scoring_weights добавлен")
         else:
             print("✓ scoring_weights уже есть")
+            # Обновляем существующие веса, добавляя random_username_risk если его нет
+            cursor = await db.execute('SELECT chat_id, scoring_weights FROM chats')
+            rows = await cursor.fetchall()
+            import json
+            for row in rows:
+                if row['scoring_weights']:
+                    weights = json.loads(row['scoring_weights'])
+                    if 'random_username_risk' not in weights:
+                        weights['random_username_risk'] = 10
+                        await db.execute(
+                            'UPDATE chats SET scoring_weights = ? WHERE chat_id = ?',
+                            (json.dumps(weights), row['chat_id'])
+                        )
+            if rows:
+                print("✅ Добавлен random_username_risk в существующие конфигурации")
         
         if 'scoring_auto_adjust' not in column_names:
             print("➕ Добавляем scoring_auto_adjust...")

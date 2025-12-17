@@ -369,6 +369,7 @@ class Database:
                 'no_username_risk': weights.get('no_username_risk', 5),
                 'weird_name_risk': weights.get('weird_name_risk', 10),
                 'arabic_cjk_risk': weights.get('arabic_cjk_risk', 25),
+                'random_username_risk': weights.get('random_username_risk', 10),
                 'auto_adjust': bool(row['scoring_auto_adjust'])
             }
 

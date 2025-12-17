@@ -52,6 +52,7 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
         'one_avatar_risk': config['one_avatar_risk'],
         'no_lang_risk': config['no_lang_risk'],
         'max_id_risk': config['max_id_risk'],
+        'random_username_risk': config['random_username_risk'],
     }
     
     updated_weights = current_weights.copy()

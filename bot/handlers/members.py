@@ -95,7 +95,8 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                     one_avatar_risk=scoring_config_data['one_avatar_risk'],
                     no_username_risk=scoring_config_data['no_username_risk'],
                     weird_name_risk=scoring_config_data['weird_name_risk'],
-                    arabic_cjk_risk=scoring_config_data['arabic_cjk_risk']
+                    arabic_cjk_risk=scoring_config_data['arabic_cjk_risk'],
+                    random_username_risk=scoring_config_data['random_username_risk']
                 )
                 stats = ScoringStats(
                     lang_counts=stats_data['lang_counts'],

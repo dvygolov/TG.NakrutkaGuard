@@ -55,7 +55,8 @@ async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
                     one_avatar_risk=scoring_config['one_avatar_risk'],
                     no_username_risk=scoring_config['no_username_risk'],
                     weird_name_risk=scoring_config['weird_name_risk'],
-                    arabic_cjk_risk=scoring_config['arabic_cjk_risk']
+                    arabic_cjk_risk=scoring_config['arabic_cjk_risk'],
+                    random_username_risk=scoring_config['random_username_risk']
                 )
                 stats = ScoringStats(
                     lang_counts=stats_data['lang_counts'],

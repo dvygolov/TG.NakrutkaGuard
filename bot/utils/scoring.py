@@ -5,6 +5,7 @@ import logging
 import re
 
 from aiogram.types import User
+from bot.utils.username_analysis import username_randomness
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class ScoringConfig:
     no_username_risk: int = 5    # штраф за отсутствие username
     weird_name_risk: int = 10    # штраф за отсутствие латиницы/кириллицы в ФИО
     arabic_cjk_risk: int = 25    # штраф за арабские/китайские символы в имени
+    random_username_risk: int = 10  # штраф за рандомный username (user12345, qwerty777)
 
 
 @dataclass
@@ -179,9 +181,21 @@ def score_user(
         score += cfg.no_username_risk
         details["username"] = None
         details["username_risk"] = cfg.no_username_risk
+        details["random_username"] = None
     else:
         details["username"] = username
         details["username_risk"] = 0
+        
+        # 3a. Проверка username на рандомность (user12345, qwerty777)
+        randomness = username_randomness(username, threshold=0.70)
+        if randomness.is_randomish:
+            score += cfg.random_username_risk
+            details["random_username"] = True
+            details["random_username_score"] = randomness.score
+            details["random_username_features"] = randomness.features
+        else:
+            details["random_username"] = False
+            details["random_username_score"] = randomness.score
 
     # 4. ФИО – проверка символов
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
