@@ -133,10 +133,13 @@ def score_user(
     photo_count: int,
     cfg: ScoringConfig,
     stats: ScoringStats,
+    chat_id: Optional[int] = None,
+    chat_username: Optional[str] = None,
 ) -> int:
     """
     Возвращает итоговый risk score (0–100) и логирует подробности.
     photo_count — количество аватаров пользователя (через get_user_profile_photos).
+    chat_id/chat_username — для логирования с именем чата.
     """
 
     details = {}
@@ -210,16 +213,32 @@ def score_user(
     details["final_score"] = score
     details["user_id"] = user.id
 
-    # лог
-    logger.info(
-        "USER_SCORE id=%s username=%s lang=%s premium=%s avatars=%d score=%d details=%s",
-        user.id,
-        user.username,
-        lang,
-        is_premium,
-        photo_count,
-        score,
-        details,
-    )
+    # лог с именем чата для удобства
+    if chat_username or chat_id:
+        # Используем отдельный логгер с именем чата
+        chat_log_name = chat_username if chat_username else f"chat_{abs(chat_id)}"
+        chat_logger = logging.getLogger(chat_log_name)
+        chat_logger.info(
+            "USER_SCORE id=%s username=%s lang=%s premium=%s avatars=%d score=%d details=%s",
+            user.id,
+            user.username,
+            lang,
+            is_premium,
+            photo_count,
+            score,
+            details,
+        )
+    else:
+        # Fallback на обычный логгер
+        logger.info(
+            "USER_SCORE id=%s username=%s lang=%s premium=%s avatars=%d score=%d details=%s",
+            user.id,
+            user.username,
+            lang,
+            is_premium,
+            photo_count,
+            score,
+            details,
+        )
 
     return score

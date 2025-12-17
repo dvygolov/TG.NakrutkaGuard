@@ -28,6 +28,10 @@ async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
         user = await bot.get_chat_member(chat_id, user_id)
         user_obj = user.user
         
+        # Получаем данные чата для логирования
+        chat_data = await db.get_chat(chat_id)
+        chat_username = chat_data.get('username') if chat_data else None
+        
         # Получаем количество аватарок
         photo_count = 0
         try:
@@ -59,7 +63,10 @@ async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
                     p95_id=stats_data['p95_id'],
                     p99_id=stats_data['p99_id']
                 )
-                scoring_score = score_user(user_obj, photo_count=photo_count, cfg=cfg, stats=stats)
+                scoring_score = score_user(
+                    user_obj, photo_count=photo_count, cfg=cfg, stats=stats,
+                    chat_id=chat_id, chat_username=chat_username
+                )
             except Exception as e:
                 logger.warning(f"Не удалось вычислить скор для failed user {user_id}: {e}")
         
@@ -113,6 +120,10 @@ async def send_captcha(
     try:
         print(f"[CAPTCHA] Отправляю капчу для user={user_id} (@{username}) в chat={chat_id}")
         
+        # Получаем данные чата для логирования
+        chat_data = await db.get_chat(chat_id)
+        chat_username = chat_data.get('username') if chat_data else None
+        
         # Генерируем капчу
         question, correct_answer, keyboard = captcha_gen.generate()
         print(f"[CAPTCHA] Сгенерирована капча, правильный ответ: {correct_answer}")
@@ -148,7 +159,7 @@ async def send_captcha(
         task = asyncio.create_task(_captcha_timeout_handler(bot, chat_id, user_id, message.message_id))
         print(f"[CAPTCHA] Таймер создан: {task}")
         
-        chat_logger.log_join(chat_id, None, user_id, username, False, False)
+        chat_logger.log_join(chat_id, chat_username, user_id, username, False, False)
         
         return True
         
@@ -179,6 +190,14 @@ async def _captcha_timeout_handler(bot: Bot, chat_id: int, user_id: int, message
         # Логируем характеристики неудачника для ML
         await _log_failed_captcha_user(bot, chat_id, user_id)
         
+        # Получаем username для лога
+        username = None
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+            username = member.user.username
+        except Exception:
+            pass
+        
         # Не прошёл - баним
         kick_success = False
         try:
@@ -186,7 +205,7 @@ async def _captcha_timeout_handler(bot: Bot, chat_id: int, user_id: int, message
             await bot.unban_chat_member(chat_id, user_id)  # kick
             kick_success = True
             print(f"[CAPTCHA] User={user_id} кикнут")
-            chat_logger.log_kick(chat_id, None, user_id, None, "captcha_timeout")
+            chat_logger.log_kick(chat_id, None, user_id, username, "captcha_timeout")
         except Exception as e:
             print(f"[CAPTCHA] Ошибка кика user={user_id}: {e}")
         
@@ -281,6 +300,10 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
             except Exception as e:
                 logger.warning(f"Не удалось получить фото для {user_id}: {e}")
             
+            # Получаем данные чата для логирования
+            chat_data = await db.get_chat(chat_id)
+            chat_username = chat_data.get('username') if chat_data else None
+            
             # Вычисляем скор для статистики
             scoring_score = 0
             try:
@@ -296,7 +319,10 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
                         p99_id=stats_data['p99_id']
                     )
                     
-                    scoring_score = score_user(user, photo_count=photo_count, cfg=cfg, stats=stats)
+                    scoring_score = score_user(
+                        user, photo_count=photo_count, cfg=cfg, stats=stats,
+                        chat_id=chat_id, chat_username=chat_username
+                    )
             except Exception as e:
                 logger.error(f"Не удалось вычислить скор для good_user {user_id}: {e}")
             

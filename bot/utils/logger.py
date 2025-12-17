@@ -10,23 +10,48 @@ class ChatLogger:
     
     def __init__(self):
         self._loggers = {}
+        self._chat_names = {}  # Кеш имен чатов {chat_id: username}
+    
+    def _get_chat_username(self, chat_id: int, username: Optional[str] = None) -> str:
+        """Получить username чата (из кеша или переданного значения)"""
+        if username:
+            self._chat_names[chat_id] = username
+            return username
+        
+        # Проверяем кеш
+        if chat_id in self._chat_names:
+            return self._chat_names[chat_id]
+        
+        # Fallback на chat_ID
+        return f"chat_{abs(chat_id)}"
+    
+    def update_chat_name(self, chat_id: int, username: str):
+        """Обновить имя чата в кеше (вызывается при получении данных из БД)"""
+        if username:
+            old_name = self._chat_names.get(chat_id)
+            self._chat_names[chat_id] = username
+            
+            # Если был старый логгер - переключаем на новый
+            if old_name and old_name in self._loggers and old_name != username:
+                del self._loggers[old_name]
     
     def _get_chat_folder(self, chat_id: int, username: Optional[str] = None) -> Path:
         """Получить папку для логов чата (username приоритетнее chat_id)"""
-        folder_name = username if username else f"chat_{abs(chat_id)}"
+        folder_name = self._get_chat_username(chat_id, username)
         chat_dir = LOGS_DIR / folder_name
         chat_dir.mkdir(exist_ok=True)
         return chat_dir
     
     def _get_logger(self, chat_id: int, username: Optional[str] = None) -> logging.Logger:
         """Получить или создать логгер для чата"""
-        logger_key = username if username else str(chat_id)
+        # Получаем username чата (из параметра, кеша или БД)
+        chat_name = self._get_chat_username(chat_id, username)
         
-        if logger_key in self._loggers:
-            return self._loggers[logger_key]
+        if chat_name in self._loggers:
+            return self._loggers[chat_name]
         
-        # Создаём логгер
-        logger = logging.getLogger(f'chat_{logger_key}')
+        # Создаём логгер с понятным именем
+        logger = logging.getLogger(chat_name)
         logger.setLevel(logging.INFO)
         logger.handlers.clear()
         
@@ -40,13 +65,13 @@ class ChatLogger:
         
         # Формат логов
         formatter = logging.Formatter(
-            '[%(asctime)s] %(levelname)s: %(message)s',
+            '[%(asctime)s] %(name)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         file_handler.setFormatter(formatter)
         
         logger.addHandler(file_handler)
-        self._loggers[logger_key] = logger
+        self._loggers[chat_name] = logger
         
         return logger
     

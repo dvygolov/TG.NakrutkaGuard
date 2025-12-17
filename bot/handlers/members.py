@@ -105,7 +105,10 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                 )
                 
                 # Вычисляем скор
-                risk_score = score_user(user, photo_count=photo_count, cfg=cfg, stats=stats)
+                risk_score = score_user(
+                    user, photo_count=photo_count, cfg=cfg, stats=stats,
+                    chat_id=chat.id, chat_username=chat.username
+                )
                 
                 # Если скор превышает порог - кикаем
                 if risk_score > scoring_config_data['threshold']:
