@@ -18,6 +18,21 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
+def _parse_captcha_answer(text: str) -> Optional[str]:
+    """
+    Парсим ответ на капчу: trim, оставляем только цифры.
+    Возвращает строку с цифрами или None если не валидно.
+    """
+    if not text:
+        return None
+    
+    # Trim и оставляем только цифры
+    cleaned = ''.join(c for c in text.strip() if c.isdigit())
+    
+    # Если после очистки остались цифры - возвращаем
+    return cleaned if cleaned else None
+
+
 async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
     """
     Логировать пользователя, не прошедшего капчу.
@@ -119,15 +134,12 @@ async def send_captcha(
         True если капча отправлена, False если ошибка
     """
     try:
-        print(f"[CAPTCHA] Отправляю капчу для user={user_id} (@{username}) в chat={chat_id}")
-        
         # Получаем данные чата для логирования
         chat_data = await db.get_chat(chat_id)
         chat_username = chat_data.get('username') if chat_data else None
         
-        # Генерируем капчу
+        # Генерируем капчу (без кнопок)
         question, correct_answer, keyboard = captcha_gen.generate()
-        print(f"[CAPTCHA] Сгенерирована капча, правильный ответ: {correct_answer}")
         
         # Отправляем сообщение
         if username:
@@ -137,16 +149,15 @@ async def send_captcha(
             user_mention = f'<a href="tg://user?id={user_id}">{html.escape(fallback_name)}</a>'
         text = (
             f"{user_mention}, чтобы вступить, пройдите проверку.\n\n"
-            f"{question}"
+            f"{question}\n\n"
+            f"💬 <b>Напишите ответ ЦИФРАМИ в чат</b>"
         )
         
         message = await bot.send_message(
             chat_id,
             text,
-            reply_markup=keyboard,
             parse_mode="HTML"
         )
-        print(f"[CAPTCHA] Сообщение отправлено, message_id={message.message_id}")
         
         # Сохраняем в БД (60 секунд на ответ)
         expires_at = int(time.time()) + 60
@@ -154,18 +165,19 @@ async def send_captcha(
             chat_id, user_id, message.message_id, 
             correct_answer, expires_at
         )
-        print(f"[CAPTCHA] Капча сохранена в БД, expires_at={expires_at}")
         
         # Запускаем таймер для автобана
-        task = asyncio.create_task(_captcha_timeout_handler(bot, chat_id, user_id, message.message_id))
-        print(f"[CAPTCHA] Таймер создан: {task}")
+        asyncio.create_task(_captcha_timeout_handler(bot, chat_id, user_id, message.message_id))
+        
+        # Логируем отправку капчи
+        chat_logger.log_captcha_sent(chat_id, chat_username, user_id, username, message.message_id, correct_answer)
         
         chat_logger.log_join(chat_id, chat_username, user_id, username, False, False)
         
         return True
         
     except Exception as e:
-        print(f"[CAPTCHA] ОШИБКА отправки капчи для user={user_id} в chat={chat_id}: {e}")
+        logger.error(f"Ошибка отправки капчи для user={user_id} в chat={chat_id}: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -174,19 +186,12 @@ async def send_captcha(
 async def _captcha_timeout_handler(bot: Bot, chat_id: int, user_id: int, message_id: int):
     """Обработчик таймаута капчи (60 секунд)"""
     try:
-        print(f"[CAPTCHA] Таймер запущен для user={user_id} в chat={chat_id}")
         await asyncio.sleep(60)
-        
-        print(f"[CAPTCHA] Таймер истёк для user={user_id}, проверяю статус...")
         
         # Проверяем не прошёл ли юзер капчу за это время
         pending = await db.get_pending_captcha(chat_id, user_id)
         if not pending:
-            # Уже прошёл или был удалён
-            print(f"[CAPTCHA] User={user_id} уже прошёл капчу или был удалён")
             return
-        
-        print(f"[CAPTCHA] User={user_id} НЕ прошёл капчу, кикаю...")
         
         # Логируем характеристики неудачника для ML
         await _log_failed_captcha_user(bot, chat_id, user_id)
@@ -201,28 +206,32 @@ async def _captcha_timeout_handler(bot: Bot, chat_id: int, user_id: int, message
         
         # Не прошёл - баним
         kick_success = False
+        # Получаем данные чата
+        chat_data = await db.get_chat(chat_id)
+        chat_username = chat_data.get('username') if chat_data else None
+        
         try:
             await bot.ban_chat_member(chat_id, user_id)
             await bot.unban_chat_member(chat_id, user_id)  # kick
             kick_success = True
-            print(f"[CAPTCHA] User={user_id} кикнут")
-            chat_logger.log_kick(chat_id, None, user_id, username, "captcha_timeout")
+            
+            # Логируем кик и ответ на капчу
+            chat_logger.log_captcha_answer(chat_id, chat_username, user_id, username, "timeout", False)
+            chat_logger.log_kick(chat_id, chat_username, user_id, username, "captcha_timeout")
         except Exception as e:
-            print(f"[CAPTCHA] Ошибка кика user={user_id}: {e}")
+            logger.error(f"Ошибка кика user={user_id}: {e}")
         
-        # Удаляем сообщение с капчей (ВСЕГДА, даже если кик не удался)
+        # Удаляем сообщение с капчей
         try:
             await bot.delete_message(chat_id, message_id)
-            print(f"[CAPTCHA] Сообщение {message_id} удалено")
-        except Exception as e:
-            print(f"[CAPTCHA] Не удалось удалить сообщение {message_id}: {e}")
+        except Exception:
+            pass
         
-        # Удаляем из pending (ВСЕГДА)
+        # Удаляем из pending
         try:
             await db.remove_pending_captcha(chat_id, user_id)
-            print(f"[CAPTCHA] User={user_id} удалён из pending")
-        except Exception as e:
-            print(f"[CAPTCHA] Ошибка удаления из pending: {e}")
+        except Exception:
+            pass
         
         # Проверяем нужна ли автокорректировка скоринга
         if kick_success:
@@ -235,16 +244,156 @@ async def _captcha_timeout_handler(bot: Bot, chat_id: int, user_id: int, message
                 logger.error(f"Ошибка автокорректировки для chat {chat_id}: {e}")
             
     except asyncio.CancelledError:
-        print(f"[CAPTCHA] Таймер отменён для user={user_id}")
         raise
     except Exception as e:
-        print(f"[CAPTCHA] КРИТИЧЕСКАЯ ошибка в таймере для user={user_id}: {e}")
+        logger.error(f"Критическая ошибка в таймере капчи для user={user_id}: {e}")
         import traceback
         traceback.print_exc()
 
 
+@router.message(F.text)
+async def handle_text_message(message: Message, bot: Bot):
+    """
+    Обработчик всех текстовых сообщений - проверяем, это ответ на капчу или нет.
+    Если это ответ на капчу - обрабатываем и удаляем сообщение.
+    """
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    
+    # Проверяем есть ли pending капча для этого юзера
+    pending = await db.get_pending_captcha(chat_id, user_id)
+    
+    if not pending:
+        # Нет капчи для этого юзера - не наш случай
+        return
+    
+    # Есть капча - это ответ! Парсим
+    answer = _parse_captcha_answer(message.text)
+    
+    # Удаляем сообщение сразу
+    try:
+        await bot.delete_message(chat_id, message.message_id)
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение-ответ {message.message_id}: {e}")
+    
+    if not answer:
+        # Не цифры - игнорируем, но сообщение уже удалили
+        return
+    
+    correct_answer = pending['correct_answer']
+    
+    if answer == correct_answer:
+        # ПРАВИЛЬНЫЙ ОТВЕТ
+        # Удаляем сообщение с капчей
+        try:
+            await bot.delete_message(chat_id, pending['message_id'])
+        except Exception:
+            pass
+        
+        # Удаляем из pending
+        await db.remove_pending_captcha(chat_id, user_id)
+
+        # Добавляем в good_users для статистики скоринга
+        try:
+            user = message.from_user
+            
+            # Получаем photo_count
+            photo_count = 0
+            try:
+                photos = await bot.get_user_profile_photos(user_id, limit=100)
+                photo_count = photos.total_count
+            except Exception as e:
+                logger.warning(f"Не удалось получить фото для {user_id}: {e}")
+            
+            # Получаем данные чата для логирования
+            chat_data = await db.get_chat(chat_id)
+            chat_username = chat_data.get('username') if chat_data else None
+            
+            # Вычисляем скор для статистики
+            scoring_score = 0
+            try:
+                scoring_config_data = await db.get_scoring_config(chat_id)
+                if scoring_config_data:
+                    stats_data = await db.get_scoring_stats(chat_id, days=7)
+                    
+                    cfg = ScoringConfig(**scoring_config_data)
+                    stats = ScoringStats(
+                        lang_counts=stats_data['lang_counts'],
+                        total_good_joins=stats_data['total_good_joins'],
+                        p95_id=stats_data['p95_id'],
+                        p99_id=stats_data['p99_id']
+                    )
+                    
+                    scoring_score = score_user(
+                        user, photo_count=photo_count, cfg=cfg, stats=stats,
+                        chat_id=chat_id, chat_username=chat_username
+                    )
+            except Exception as e:
+                logger.error(f"Не удалось вычислить скор для good_user {user_id}: {e}")
+            
+            await db.add_good_user(
+                chat_id, user.id,
+                user.first_name, user.last_name, user.username,
+                user.language_code, user.is_premium or False,
+                photo_count,
+                scoring_score=scoring_score
+            )
+            logger.info(f"User {user_id} добавлен в good_users (score={scoring_score})")
+        except Exception as e:
+            logger.error(f"Не удалось добавить good_user {user_id}: {e}")
+
+        # Логируем успешный ответ и join
+        chat_logger.log_captcha_answer(chat_id, chat_username, user_id, message.from_user.username, answer, True)
+        chat_logger.log_join(
+            chat_id, chat_username, user_id,
+            message.from_user.username, False, False
+        )
+        
+        # Проверяем нужна ли автокорректировка скоринга
+        if await should_trigger_auto_adjust(chat_id):
+            asyncio.create_task(auto_adjust_scoring(chat_id))
+    
+    else:
+        # НЕПРАВИЛЬНЫЙ ОТВЕТ - кикаем
+        # Удаляем сообщение с капчей
+        try:
+            await bot.delete_message(chat_id, pending['message_id'])
+        except Exception:
+            pass
+        
+        # Удаляем из pending
+        await db.remove_pending_captcha(chat_id, user_id)
+        
+        # Кикаем
+        try:
+            await bot.ban_chat_member(chat_id, user_id)
+            await bot.unban_chat_member(chat_id, user_id)
+            
+            # Получаем username для лога
+            username = None
+            try:
+                member = await bot.get_chat_member(chat_id, user_id)
+                username = member.user.username
+            except Exception:
+                pass
+            
+            # Получаем данные чата для логирования
+            chat_data = await db.get_chat(chat_id)
+            chat_username = chat_data.get('username') if chat_data else None
+            
+            # Логируем неправильный ответ и кик
+            chat_logger.log_captcha_answer(chat_id, chat_username, user_id, username, answer, False)
+            chat_logger.log_kick(chat_id, chat_username, user_id, username, "captcha_wrong")
+        except Exception as e:
+            logger.error(f"Не удалось кикнуть user={user_id}: {e}")
+        
+        # Логируем failed captcha
+        await _log_failed_captcha_user(bot, chat_id, user_id)
+
+
+# DEPRECATED: старый callback handler для кнопок (оставляем для совместимости)
 @router.callback_query(F.data.startswith("captcha:"))
-async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
+async def handle_captcha_answer_deprecated(callback: CallbackQuery, bot: Bot):
     """Обработчик ответа на капчу"""
     chat_id = callback.message.chat.id
     user_id = callback.from_user.id
@@ -271,7 +420,7 @@ async def handle_captcha_answer(callback: CallbackQuery, bot: Bot):
     answer = callback.data.split(":")[1]
     correct_answer = pending['correct_answer']
     
-    print(f"[CAPTCHA] Ответ user={user_id}: {answer}, правильный: {correct_answer}")
+    print(f"[CAPTCHA] Ответ user={user_id}: {answer}, правильный: {correct_answer}\n")
     
     if answer == correct_answer:
         # ПРАВИЛЬНЫЙ ОТВЕТ

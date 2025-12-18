@@ -119,6 +119,25 @@ class ChatLogger:
         status = "ENABLED" if enabled else "DISABLED"
         logger.info(f"PROTECTION MODE: {status}")
     
+    def log_captcha_sent(self, chat_id: int, username: Optional[str], user_id: int,
+                        user_username: Optional[str], message_id: int, correct_answer: str):
+        """Логировать отправку капчи"""
+        logger = self._get_logger(chat_id, username)
+        logger.info(
+            f"CAPTCHA | USER | ID: {user_id} | Username: {user_username or 'None'} | "
+            f"Sent captcha {message_id}, correct answer: {correct_answer}"
+        )
+    
+    def log_captcha_answer(self, chat_id: int, username: Optional[str], user_id: int,
+                          user_username: Optional[str], answer: str, passed: bool):
+        """Логировать ответ на капчу"""
+        logger = self._get_logger(chat_id, username)
+        result = "passed" if passed else "failed"
+        logger.info(
+            f"CAPTCHA | USER | ID: {user_id} | Username: {user_username or 'None'} | "
+            f"Answered {answer} and {result}"
+        )
+    
     def log_settings_change(self, chat_id: int, username: Optional[str], 
                            setting: str, old_value, new_value):
         """Логировать изменение настроек"""
