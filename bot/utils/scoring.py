@@ -6,6 +6,14 @@ import re
 
 from aiogram.types import User
 from bot.utils.username_analysis import username_randomness
+from bot.utils.name_checks import (
+    has_latin_or_cyrillic,
+    has_exotic_script,
+    has_special_chars,
+    get_max_char_repeat,
+    NAME_EXOTIC_SCRIPT_RE,
+    NAME_SPECIAL_CHARS_RE
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,30 +59,6 @@ class ScoringStats:
 # ---------------- Вспомогательные функции ---------------- #
 
 LANG_CODE_RE = re.compile(r"^[a-zA-Z]{2,3}")       # выцепляем базовый язык из 'en-US' и т.п.
-NAME_HAS_LAT_CYR_RE = re.compile(r"[A-Za-zА-Яа-я]")  # проверка ФИО на латиницу/кириллицу
-
-# Экзотические письменности (арабская, CJK, эфиопская, тайская, бенгальская и т.д.)
-NAME_EXOTIC_SCRIPT_RE = re.compile(
-    r"["
-    r"\u0600-\u06FF"      # Arabic
-    r"\u4E00-\u9FFF"      # CJK Unified Ideographs
-    r"\u3040-\u309F"      # Hiragana
-    r"\u30A0-\u30FF"      # Katakana
-    r"\uAC00-\uD7AF"      # Hangul (Korean)
-    r"\u1200-\u137F"      # Ethiopic
-    r"\u0E00-\u0E7F"      # Thai
-    r"\u0980-\u09FF"      # Bengali
-    r"\u0A00-\u0A7F"      # Gurmukhi
-    r"\u0D00-\u0D7F"      # Malayalam
-    r"\u0C80-\u0CFF"      # Kannada
-    r"\u0B00-\u0B7F"      # Oriya
-    r"\u0780-\u07BF"      # Thaana
-    r"\u1100-\u11FF"      # Hangul Jamo
-    r"]"
-)
-
-# Специальные/подозрительные символы (не буквы, не цифры, не стандартные пробелы/дефисы)
-NAME_SPECIAL_CHARS_RE = re.compile(r"[<>«»@#$%^&*+=\[\]{}|\\`~]")
 
 def _normalize_lang(lang: Optional[str]) -> Optional[str]:
     if not lang:
@@ -141,8 +125,6 @@ def _compute_id_risk(user_id: int, cfg: ScoringConfig, stats: ScoringStats) -> i
     return 0
 
 
-def _has_lat_or_cyrillic(full_name: str) -> bool:
-    return bool(NAME_HAS_LAT_CYR_RE.search(full_name))
 
 
 # ---------------- Основная функция скоринга ---------------- #
@@ -215,33 +197,21 @@ def score_user(
 
     # 4. ФИО – проверка символов
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-    has_normal_letters = _has_lat_or_cyrillic(full_name)
-    has_exotic_script = bool(NAME_EXOTIC_SCRIPT_RE.search(full_name))
-    has_special_chars = bool(NAME_SPECIAL_CHARS_RE.search(full_name))
-    
-    # Подсчёт повторяющихся символов (jjjjj, ааааа)
-    max_repeat = 1
-    if len(full_name) > 1:
-        current_char = full_name[0].lower()
-        current_count = 1
-        for char in full_name[1:]:
-            if char.lower() == current_char and char.isalnum():
-                current_count += 1
-                max_repeat = max(max_repeat, current_count)
-            else:
-                current_char = char.lower()
-                current_count = 1
+    has_normal_letters = has_latin_or_cyrillic(full_name)
+    name_has_exotic = has_exotic_script(full_name)
+    name_has_special = has_special_chars(full_name)
+    max_repeat = get_max_char_repeat(full_name)
     
     # Отсутствие рус/англ букв = подозрительно
     if not has_normal_letters:
         score += cfg.weird_name_risk
     
     # Наличие экзотических письменностей = очень подозрительно
-    if has_exotic_script:
+    if name_has_exotic:
         score += cfg.exotic_script_risk
     
     # Специальные символы (>, <, и т.д.) = подозрительно
-    if has_special_chars:
+    if name_has_special:
         score += cfg.special_chars_risk
     
     # Много повторяющихся символов (5+ подряд) = подозрительно
@@ -250,8 +220,8 @@ def score_user(
     
     details["full_name"] = full_name
     details["weird_name_risk"] = 0 if has_normal_letters else cfg.weird_name_risk
-    details["exotic_script_risk"] = cfg.exotic_script_risk if has_exotic_script else 0
-    details["special_chars_risk"] = cfg.special_chars_risk if has_special_chars else 0
+    details["exotic_script_risk"] = cfg.exotic_script_risk if name_has_exotic else 0
+    details["special_chars_risk"] = cfg.special_chars_risk if name_has_special else 0
     details["repeating_chars_risk"] = cfg.repeating_chars_risk if max_repeat >= 5 else 0
     details["max_char_repeat"] = max_repeat
 

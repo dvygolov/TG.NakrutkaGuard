@@ -4,6 +4,8 @@ import json
 import logging
 from typing import Optional, List, Dict, Any
 from bot.config import DB_PATH
+from bot.utils.username_analysis import username_randomness
+from bot.utils.name_checks import has_latin_or_cyrillic, has_exotic_script
 
 logger = logging.getLogger(__name__)
 
@@ -448,11 +450,7 @@ class Database:
                     random_username_count += 1
             stats['random_username_rate'] = (random_username_count / total) if total > 0 else 0
         
-        # Вычисляем характеристики имени на лету
-        import re
-        LATIN_CYRILLIC_RE = re.compile(r"[A-Za-zА-Яа-я]")
-        ARABIC_CJK_RE = re.compile(r"[\u0600-\u06FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]")
-        
+        # Вычисляем характеристики имени используя общие функции
         async with self._connection.execute('''
             SELECT first_name, last_name FROM failed_users
             WHERE chat_id = ? AND failed_at >= ?
@@ -462,9 +460,9 @@ class Database:
             weird_name_count = 0
             for row in rows:
                 full_name = f"{row['first_name'] or ''} {row['last_name'] or ''}".strip()
-                if ARABIC_CJK_RE.search(full_name):
+                if has_exotic_script(full_name):
                     arabic_cjk_count += 1
-                if not LATIN_CYRILLIC_RE.search(full_name):
+                if not has_latin_or_cyrillic(full_name):
                     weird_name_count += 1
             
             stats['arabic_cjk_rate'] = (arabic_cjk_count / total) if total > 0 else 0

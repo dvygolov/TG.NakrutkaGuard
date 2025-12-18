@@ -13,6 +13,9 @@ if __name__ == "__main__":
     test("YAdBIOHobLc91Vp")
     test("biAEQOKoOGf")
     test("AXhRLq")
+    test("sEnfRioy58YOXM")
+    test("cShSfQQPl0")
+    test("ji7nPBxer")
     
     # Типичные боты
     test("user12345")
