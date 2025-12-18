@@ -2,8 +2,10 @@
 Автоматическая корректировка весов скоринга на основе провалов капчи.
 """
 import logging
-from typing import Dict, Any, Optional
+import json
+from typing import Optional, Dict, Any
 from bot.database import db
+from bot.utils.logger import chat_logger as chat_log
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,11 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
     Returns:
         Dict с изменениями или None если корректировка не нужна
     """
+    # Получаем данные чата для логов
+    chat_data = await db.get_chat(chat_id)
+    chat_username = chat_data.get('username') if chat_data else None
+    chat_name = chat_log.get_chat_display_name(chat_id, chat_username)
+    
     # Проверяем включена ли автокорректировка
     config = await db.get_scoring_config(chat_id)
     if not config or not config.get('auto_adjust', True):
@@ -31,17 +38,17 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
     # Получаем статистику провалов (минимум 30 примеров)
     failed_stats = await db.get_failed_captcha_stats(chat_id, days=7, min_samples=30)
     if not failed_stats:
-        logger.info(f"Chat {chat_id}: недостаточно данных для автокорректировки")
+        logger.info(f"{chat_name}: недостаточно данных для автокорректировки")
         return None
     
-    logger.info(f"Chat {chat_id}: автокорректировка на основе {failed_stats['total_failed']} провалов")
+    logger.info(f"{chat_name}: автокорректировка на основе {failed_stats['total_failed']} провалов")
     
     # Получаем статистику успешных юзеров для защиты от false positives
     good_stats = await db.get_good_users_stats(chat_id, days=7, min_samples=30)
     if good_stats:
-        logger.info(f"Chat {chat_id}: анализируем {good_stats['total_good']} успешных юзеров для защиты от false positives")
+        logger.info(f"{chat_name}: анализируем {good_stats['total_good']} успешных юзеров для защиты от false positives")
     else:
-        logger.info(f"Chat {chat_id}: недостаточно успешных юзеров (< 30) для проверки false positives")
+        logger.info(f"{chat_name}: недостаточно успешных юзеров (< 30) для проверки false positives")
     
     # Текущие веса
     current_weights = {
@@ -71,7 +78,7 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
         if good_stats and good_rate > FALSE_POSITIVE_THRESHOLD:
             msg = f"no_username_risk: НЕ повышаем - false positive (провалы: {failed_stats['no_username_rate']:.1%}, успешные: {good_rate:.1%})"
             changes.append(msg)
-            logger.warning(f"Chat {chat_id}: {msg}")
+            logger.warning(f"{chat_name}: {msg}")
         else:
             old = current_weights['no_username_risk']
             new = min(old + ADJUSTMENT_STEP, 30)  # макс 30
@@ -124,7 +131,7 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
         if good_stats and good_no_lang > FALSE_POSITIVE_THRESHOLD:
             msg = f"no_lang_risk: НЕ повышаем - false positive (провалы: {no_lang_rate:.1%}, успешные: {good_no_lang:.1%})"
             changes.append(msg)
-            logger.warning(f"Chat {chat_id}: {msg}")
+            logger.warning(f"{chat_name}: {msg}")
         else:
             old_no_lang = config['no_lang_risk']
             new_no_lang = min(old_no_lang + ADJUSTMENT_STEP, 25)  # макс 25
@@ -199,13 +206,13 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
             updates['scoring_threshold'] = threshold
         
         await db.update_chat_settings(chat_id, **updates)
-        logger.info(f"Chat {chat_id}: применены изменения:\n" + "\n".join(changes))
+        logger.info(f"{chat_name}: применены изменения:\n" + "\n".join(changes))
         return {
             'changes': changes,
             'stats': failed_stats
         }
     else:
-        logger.info(f"Chat {chat_id}: корректировка не требуется")
+        logger.info(f"{chat_name}: корректировка не требуется")
         return None
 
 

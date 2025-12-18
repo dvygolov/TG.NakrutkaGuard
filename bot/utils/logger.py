@@ -35,6 +35,21 @@ class ChatLogger:
             if old_name and old_name in self._loggers and old_name != username:
                 del self._loggers[old_name]
     
+    def get_chat_display_name(self, chat_id: int, username: Optional[str] = None) -> str:
+        """
+        Получить читаемое название чата для логов.
+        Использует username из параметра, кеша или fallback на chat_ID.
+        """
+        if username:
+            self._chat_names[chat_id] = username
+            return f"@{username}"
+        
+        cached = self._chat_names.get(chat_id)
+        if cached:
+            return f"@{cached}"
+        
+        return f"chat_{abs(chat_id)}"
+    
     def _get_chat_folder(self, chat_id: int, username: Optional[str] = None) -> Path:
         """Получить папку для логов чата (username приоритетнее chat_id)"""
         folder_name = self._get_chat_username(chat_id, username)

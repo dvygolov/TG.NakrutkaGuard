@@ -350,7 +350,7 @@ class Database:
             
             # Если канал использует скоринг связанного чата
             if row['use_linked_chat_scoring'] and row['linked_chat_id']:
-                logger.info(f"Chat {chat_id}: использует скоринг из связанного чата {row['linked_chat_id']}")
+                logger.debug(f"Chat {chat_id}: использует скоринг из связанного чата {row['linked_chat_id']}")
                 # Рекурсивно получаем конфиг из связанного чата
                 return await self.get_scoring_config(row['linked_chat_id'])
             

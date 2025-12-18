@@ -101,8 +101,6 @@ async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
             scoring_score=scoring_score
         )
         
-        logger.info(f"Logged failed user {user_id} in chat {chat_id}: score={scoring_score}, photos={photo_count}")
-        
     except Exception as e:
         logger.error(f"Ошибка логирования failed user {user_id}: {e}")
 

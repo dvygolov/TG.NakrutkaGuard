@@ -74,6 +74,21 @@ def _vowel_ratio(s: str) -> float:
     return v / len(letters)
 
 
+def _max_consecutive_vowels(s: str) -> int:
+    """Максимальное количество гласных подряд."""
+    if not s:
+        return 0
+    max_count = 0
+    current_count = 0
+    for ch in s.lower():
+        if ch.isalpha() and ch in _VOWELS:
+            current_count += 1
+            max_count = max(max_count, current_count)
+        else:
+            current_count = 0
+    return max_count
+
+
 def username_randomness(
     username: Optional[str],
     threshold: float = 0.70,
@@ -110,6 +125,7 @@ def username_randomness(
     vr = _vowel_ratio(s)                         # 0..1
     max_run = _max_same_run(s)                   # 1..n
     dom = _dominant_char_ratio(s)                # 1/n..1
+    max_cons_vowels = _max_consecutive_vowels(s) # 0..n
 
     # 1) Смена классов — ключевой драйвер "рандома"
     # Усиливаем эффект степенью: низкие значения ещё ниже, высокие ещё выше.
@@ -117,11 +133,22 @@ def username_randomness(
 
     # 2) Гласные: "рандомный" ник часто с малым числом гласных.
     # Преобразуем в "нехватку гласных": 1 - vr
-    # И добавим мягкий порог: если vr > 0.35, снижаем рандомность сильнее.
+    # Усиливаем влияние отсутствия гласных (vr < 0.15) и малого количества (vr < 0.25)
     vowel_lack = 1.0 - vr
-    if vr > 0.35:
-        vowel_lack *= 0.75
-    vowel_component = min(max(vowel_lack, 0.0), 1.0)
+    if vr < 0.15:
+        # Очень мало/нет гласных - сильный признак рандома
+        # Разрешаем превышать 1.0 для усиления эффекта
+        vowel_lack *= 1.5
+    elif vr > 0.40:
+        # Много гласных - снижаем, но не так агрессивно
+        vowel_lack *= 0.85
+    
+    # 3+ гласных подряд - очень подозрительно (например "OOO" в "biAEQOKoOGf")
+    if max_cons_vowels >= 3:
+        vowel_lack += 0.25
+    
+    # Обрезаем только в конце после всех модификаций
+    vowel_component = min(max(vowel_lack, 0.0), 1.5)
 
     # 3) Повторы: длинные повторы и высокая доминация символа — это скорее паттерн.
     # Поэтому это "штрафы" (penalty), которые вычитаются.
@@ -137,20 +164,21 @@ def username_randomness(
     else:
         repeat_penalty = 0.45
 
-    # Доминирующий символ: если > 0.25, это уже не очень "равномерно"
+    # Доминирующий символ: если > 0.40, это уже не очень "равномерно"
+    # Повышаем пороги чтобы не штрафовать за нормальные повторы букв
     dom_penalty = 0.0
-    if dom > 0.35:
-        dom_penalty = 0.25
-    elif dom > 0.28:
-        dom_penalty = 0.18
-    elif dom > 0.22:
-        dom_penalty = 0.10
+    if dom > 0.50:
+        dom_penalty = 0.20
+    elif dom > 0.45:
+        dom_penalty = 0.12
+    elif dom > 0.40:
+        dom_penalty = 0.08
 
     # 4) Итоговый score: только нужные признаки.
     # Весами можно управлять под ваши данные.
     score = 0.0
-    score += 0.60 * tr_component
-    score += 0.40 * vowel_component
+    score += 0.50 * tr_component
+    score += 0.50 * vowel_component
     score -= repeat_penalty
     score -= dom_penalty
 
@@ -169,6 +197,7 @@ def username_randomness(
             "len": n,
             "transition_rate": round(tr, 3),
             "vowel_ratio": round(vr, 3),
+            "max_consecutive_vowels": max_cons_vowels,
             "max_same_run": max_run,
             "dominant_char_ratio": round(dom, 3),
             "repeat_penalty": repeat_penalty,
