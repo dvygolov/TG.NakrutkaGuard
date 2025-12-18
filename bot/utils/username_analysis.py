@@ -65,6 +65,27 @@ def _char_type_run_count(s: str) -> int:
     return runs
 
 
+def _case_switch_count(s: str) -> int:
+    """
+    Кол-во смен регистра в буквах: Upper↔Lower.
+    У "YAdBIOHobLc91Vp" будет много смен (рандомный паттерн).
+    """
+    if not s:
+        return 0
+    
+    switches = 0
+    prev_case = None
+    
+    for ch in s:
+        if ch.isalpha():
+            cur_case = "U" if ch.isupper() else "L"
+            if prev_case is not None and cur_case != prev_case:
+                switches += 1
+            prev_case = cur_case
+    
+    return switches
+
+
 def _has_common_patterns(s: str) -> bool:
     low = s.lower()
     if any(frag in low for frag in _COMMON_WORD_FRAGS):
@@ -110,6 +131,10 @@ def username_randomness(
     ent_norm = min(ent / 4.2, 1.0)           # грубая нормализация под a-z0-9_
     runs = _char_type_run_count(s)
     runs_norm = min((runs - 1) / max(n - 1, 1), 1.0)  # доля смен типа
+    
+    # Смены регистра (YAdBIOHobLc91Vp = много смен = подозрительно)
+    case_switches = _case_switch_count(s)
+    case_switches_norm = min(case_switches / max(letters - 1, 1), 1.0) if letters > 1 else 0.0
 
     # Вокалы: у "словоподобных" никнеймов обычно есть гласные
     vowel_cnt = sum((ch in _VOWELS) for ch in low if "a" <= ch <= "z")
@@ -136,13 +161,14 @@ def username_randomness(
     is_alnum_und = bool(_ALNUM_UND_RE.match(s))
 
     # Логика скоринга: взвешенная сумма сигналов
-    # Основные драйверы: много цифр, высокая энтропия, много смен типов, мало гласных.
+    # Основные драйверы: много цифр, высокая энтропия, много смен типов, мало гласных, смены регистра.
     score = 0.0
-    score += 0.30 * ent_norm
-    score += 0.25 * min(frac_digits / 0.6, 1.0)     # 0..1, если цифр >=60% => 1
-    score += 0.20 * runs_norm
-    score += 0.15 * low_vowels
-    score += 0.10 * repeated_chars_penalty
+    score += 0.28 * ent_norm
+    score += 0.22 * min(frac_digits / 0.6, 1.0)     # 0..1, если цифр >=60% => 1
+    score += 0.18 * runs_norm
+    score += 0.12 * case_switches_norm              # YAdBIOHobLc91Vp = много смен = подозрительно
+    score += 0.12 * low_vowels
+    score += 0.08 * repeated_chars_penalty
 
     # Штраф за "другие символы" (не underscore/латиница/цифры)
     # Это больше про общий риск, но пусть поднимет скор.
@@ -166,6 +192,8 @@ def username_randomness(
         "entropy_norm": round(ent_norm, 3),
         "type_runs": runs,
         "type_runs_norm": round(runs_norm, 3),
+        "case_switches": case_switches,
+        "case_switches_norm": round(case_switches_norm, 3),
         "vowel_ratio": round(vowel_ratio, 3),
         "low_vowels_flag": bool(low_vowels),
         "max_same_char_run": max_run_same,

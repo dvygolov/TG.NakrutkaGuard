@@ -119,9 +119,6 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                             chat.id, chat.username, user.id,
                             user.username, f"scoring_{risk_score}"
                         )
-                    logger.info(
-                        f"Юзер {user.id} кикнут по скорингу: score={risk_score} > threshold={scoring_config_data['threshold']}"
-                    )
                     return
                 else:
                     # Скор прошёл

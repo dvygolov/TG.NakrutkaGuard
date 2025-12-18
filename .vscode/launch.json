@@ -21,6 +21,15 @@
             "envFile": "${workspaceFolder}/.env",
             "cwd": "${workspaceFolder}",
             "logToFile": true
+        },
+        {
+            "name": "Test Username Analysis",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test_username_analysis.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

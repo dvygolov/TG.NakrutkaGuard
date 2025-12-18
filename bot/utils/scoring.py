@@ -187,15 +187,16 @@ def score_user(
         details["username_risk"] = 0
         
         # 3a. Проверка username на рандомность (user12345, qwerty777)
+        # Вместо бинарной проверки используем градацию: чем выше вероятность рандомности, тем больше риск
         randomness = username_randomness(username, threshold=0.70)
-        if randomness.is_randomish:
-            score += cfg.random_username_risk
-            details["random_username"] = True
-            details["random_username_score"] = randomness.score
+        random_risk = int(cfg.random_username_risk * randomness.score)
+        score += random_risk
+        
+        details["random_username"] = randomness.is_randomish
+        details["random_username_score"] = randomness.score
+        details["random_username_risk_applied"] = random_risk
+        if randomness.score >= 0.5:  # Записываем фичи если подозрительно
             details["random_username_features"] = randomness.features
-        else:
-            details["random_username"] = False
-            details["random_username_score"] = randomness.score
 
     # 4. ФИО – проверка символов
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
