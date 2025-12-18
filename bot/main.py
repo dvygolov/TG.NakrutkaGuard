@@ -47,8 +47,8 @@ async def main():
     # Регистрация роутеров
     dp.include_router(setup.router)
     dp.include_router(statistics.router)  # Статистика
-    dp.include_router(moderation.router)  # Групповая модерация должна обрабатываться до капчи/участников
-    dp.include_router(captcha.router)  # Капча должна быть ДО members (фильтр сообщений)
+    dp.include_router(captcha.router)  # ВАЖНО: капча должна быть ДО moderation (чтобы ответы на капчу обрабатывались первыми)
+    dp.include_router(moderation.router)  # Групповая модерация (удаление сообщений от pending юзеров)
     dp.include_router(members.router)
     
     # Запуск polling
