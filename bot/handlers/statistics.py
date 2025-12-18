@@ -235,6 +235,7 @@ async def show_failed_profile(callback: CallbackQuery):
         
         text += f"<b>Характеристики:</b>\n"
         text += f"• Без username: {failed_stats['no_username_rate'] * 100:.1f}%\n"
+        text += f"• Рандомный username: {failed_stats.get('random_username_rate', 0) * 100:.1f}%\n"
         text += f"• Арабские/CJK символы: {failed_stats['arabic_cjk_rate'] * 100:.1f}%\n"
         text += f"• Без лат/кир в имени: {failed_stats['weird_name_rate'] * 100:.1f}%\n"
         text += f"• Без аватарок: {failed_stats['no_avatar_rate'] * 100:.1f}%\n"
@@ -281,6 +282,7 @@ async def show_success_profile(callback: CallbackQuery):
         # Характеристики успешных юзеров
         text += f"<b>Характеристики:</b>\n"
         text += f"• Без username: {good_stats['no_username_rate'] * 100:.1f}%\n"
+        text += f"• Рандомный username: {good_stats.get('random_username_rate', 0) * 100:.1f}%\n"
         text += f"• Без языка: {good_stats['no_language_rate'] * 100:.1f}%\n"
         text += f"• Premium пользователи: {good_stats.get('premium_rate', 0) * 100:.1f}%\n\n"
         

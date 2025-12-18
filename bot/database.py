@@ -432,6 +432,20 @@ class Database:
             row = await cursor.fetchone()
             stats['no_username_rate'] = (row['count'] / total) if total > 0 else 0
         
+        # Процент рандомных username (пересчитываем на лету)
+        from bot.utils.username_analysis import username_randomness
+        async with self._connection.execute('''
+            SELECT username FROM failed_users
+            WHERE chat_id = ? AND failed_at >= ? AND username IS NOT NULL AND username != ''
+        ''', (chat_id, cutoff_time)) as cursor:
+            rows = await cursor.fetchall()
+            random_username_count = 0
+            for row in rows:
+                result = username_randomness(row['username'], threshold=0.70)
+                if result.is_randomish:
+                    random_username_count += 1
+            stats['random_username_rate'] = (random_username_count / total) if total > 0 else 0
+        
         # Вычисляем характеристики имени на лету
         import re
         LATIN_CYRILLIC_RE = re.compile(r"[A-Za-zА-Яа-я]")
@@ -569,6 +583,20 @@ class Database:
         ''', (chat_id, cutoff_time)) as cursor:
             row = await cursor.fetchone()
             stats['no_username_rate'] = (row['count'] / total) if total > 0 else 0
+        
+        # Процент рандомных username (пересчитываем на лету)
+        from bot.utils.username_analysis import username_randomness
+        async with self._connection.execute('''
+            SELECT username FROM good_users
+            WHERE chat_id = ? AND verified_at >= ? AND username IS NOT NULL AND username != ''
+        ''', (chat_id, cutoff_time)) as cursor:
+            rows = await cursor.fetchall()
+            random_username_count = 0
+            for row in rows:
+                result = username_randomness(row['username'], threshold=0.70)
+                if result.is_randomish:
+                    random_username_count += 1
+            stats['random_username_rate'] = (random_username_count / total) if total > 0 else 0
         
         # Процент без языка
         async with self._connection.execute('''
