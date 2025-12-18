@@ -46,7 +46,7 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
     # Текущие веса
     current_weights = {
         'no_username_risk': config['no_username_risk'],
-        'arabic_cjk_risk': config['arabic_cjk_risk'],
+        'exotic_script_risk': config.get('exotic_script_risk', config.get('arabic_cjk_risk', 25)),
         'weird_name_risk': config['weird_name_risk'],
         'no_avatar_risk': config['no_avatar_risk'],
         'one_avatar_risk': config['one_avatar_risk'],
@@ -80,13 +80,13 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
                 changes.append(f"no_username_risk: {old} -> {new} (failed={failed_stats['no_username_rate']:.2%})")
                 weights_changed = True
     
-    # Арабские/CJK
+    # Экзотические письменности (арабская, CJK, эфиопская и т.д.)
     if failed_stats['arabic_cjk_rate'] > HIGH_FREQ_THRESHOLD:
-        old = current_weights['arabic_cjk_risk']
+        old = current_weights['exotic_script_risk']
         new = min(old + ADJUSTMENT_STEP, 40)  # макс 40
         if new != old:
-            updated_weights['arabic_cjk_risk'] = new
-            changes.append(f"arabic_cjk_risk: {old} -> {new} (rate={failed_stats['arabic_cjk_rate']:.2%})")
+            updated_weights['exotic_script_risk'] = new
+            changes.append(f"exotic_script_risk: {old} -> {new} (rate={failed_stats['arabic_cjk_rate']:.2%})")
             weights_changed = True
     
     # Weird names (без латиницы/кириллицы)
@@ -187,7 +187,10 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
                 'one_avatar_risk': updated_weights['one_avatar_risk'],
                 'no_username_risk': updated_weights['no_username_risk'],
                 'weird_name_risk': updated_weights['weird_name_risk'],
-                'arabic_cjk_risk': updated_weights['arabic_cjk_risk'],
+                'exotic_script_risk': updated_weights['exotic_script_risk'],
+                'special_chars_risk': config.get('special_chars_risk', 15),
+                'repeating_chars_risk': config.get('repeating_chars_risk', 5),
+                'random_username_risk': updated_weights['random_username_risk'],
             }
             updates['scoring_weights'] = json.dumps(all_weights)
         

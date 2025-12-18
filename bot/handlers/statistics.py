@@ -67,8 +67,11 @@ async def show_current_settings(callback: CallbackQuery):
     
     text += f"<b>Веса признаков риска:</b>\n"
     text += f"• Нет username: <code>{config['no_username_risk']}</code>\n"
-    text += f"• Арабские/CJK символы: <code>{config['arabic_cjk_risk']}</code>\n"
+    text += f"• Рандомный username: <code>{config['random_username_risk']}</code>\n"
+    text += f"• Экзотические письменности: <code>{config['exotic_script_risk']}</code>\n"
     text += f"• Странное имя (без лат/кир): <code>{config['weird_name_risk']}</code>\n"
+    text += f"• Спецсимволы в имени: <code>{config.get('special_chars_risk', 15)}</code>\n"
+    text += f"• Повторы символов: <code>{config.get('repeating_chars_risk', 5)}</code>\n"
     text += f"• Нет аватарок: <code>{config['no_avatar_risk']}</code>\n"
     text += f"• Одна аватарка: <code>{config['one_avatar_risk']}</code>\n"
     text += f"• Макс. риск по языку: <code>{config['max_lang_risk']}</code>\n"
@@ -176,7 +179,7 @@ async def show_adjustment_history(callback: CallbackQuery):
         if config:
             max_limits = {
                 'no_username_risk': 30,
-                'arabic_cjk_risk': 40,
+                'exotic_script_risk': 40,
                 'weird_name_risk': 25,
                 'no_avatar_risk': 30,
                 'one_avatar_risk': 15,
@@ -188,7 +191,7 @@ async def show_adjustment_history(callback: CallbackQuery):
                 if config.get(param, 0) >= max_val:
                     param_names = {
                         'no_username_risk': 'Без username',
-                        'arabic_cjk_risk': 'Арабские/CJK',
+                        'exotic_script_risk': 'Экзотические письменности',
                         'weird_name_risk': 'Странное имя',
                         'no_avatar_risk': 'Без аватарок',
                         'one_avatar_risk': 'Одна аватарка',

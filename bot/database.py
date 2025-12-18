@@ -43,7 +43,7 @@ class Database:
                 scoring_enabled BOOLEAN DEFAULT 0,
                 scoring_threshold INTEGER DEFAULT 50,
                 scoring_lang_distribution TEXT DEFAULT '{"ru": 0.8, "en": 0.2}',
-                scoring_weights TEXT DEFAULT '{"max_lang_risk": 25, "no_lang_risk": 15, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 5, "weird_name_risk": 10, "arabic_cjk_risk": 25}',
+                scoring_weights TEXT DEFAULT '{"max_lang_risk": 25, "no_lang_risk": 15, "max_id_risk": 20, "premium_bonus": -20, "no_avatar_risk": 15, "one_avatar_risk": 5, "no_username_risk": 15, "weird_name_risk": 10, "exotic_script_risk": 25, "special_chars_risk": 15, "repeating_chars_risk": 5, "random_username_risk": 15}',
                 scoring_auto_adjust BOOLEAN DEFAULT 1,
                 use_linked_chat_scoring BOOLEAN DEFAULT 0,
                 linked_chat_id INTEGER
@@ -366,10 +366,12 @@ class Database:
                 'premium_bonus': weights.get('premium_bonus', -20),
                 'no_avatar_risk': weights.get('no_avatar_risk', 15),
                 'one_avatar_risk': weights.get('one_avatar_risk', 5),
-                'no_username_risk': weights.get('no_username_risk', 5),
+                'no_username_risk': weights.get('no_username_risk', 15),
                 'weird_name_risk': weights.get('weird_name_risk', 10),
-                'arabic_cjk_risk': weights.get('arabic_cjk_risk', 25),
-                'random_username_risk': weights.get('random_username_risk', 10),
+                'exotic_script_risk': weights.get('exotic_script_risk', weights.get('arabic_cjk_risk', 25)),
+                'special_chars_risk': weights.get('special_chars_risk', 15),
+                'repeating_chars_risk': weights.get('repeating_chars_risk', 5),
+                'random_username_risk': weights.get('random_username_risk', 15),
                 'auto_adjust': bool(row['scoring_auto_adjust'])
             }
 

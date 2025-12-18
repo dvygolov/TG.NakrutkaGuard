@@ -95,7 +95,9 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                     one_avatar_risk=scoring_config_data['one_avatar_risk'],
                     no_username_risk=scoring_config_data['no_username_risk'],
                     weird_name_risk=scoring_config_data['weird_name_risk'],
-                    arabic_cjk_risk=scoring_config_data['arabic_cjk_risk'],
+                    exotic_script_risk=scoring_config_data.get('exotic_script_risk', scoring_config_data.get('arabic_cjk_risk', 25)),
+                    special_chars_risk=scoring_config_data.get('special_chars_risk', 15),
+                    repeating_chars_risk=scoring_config_data.get('repeating_chars_risk', 5),
                     random_username_risk=scoring_config_data['random_username_risk']
                 )
                 stats = ScoringStats(

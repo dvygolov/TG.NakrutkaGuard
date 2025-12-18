@@ -70,7 +70,9 @@ async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
                     one_avatar_risk=scoring_config['one_avatar_risk'],
                     no_username_risk=scoring_config['no_username_risk'],
                     weird_name_risk=scoring_config['weird_name_risk'],
-                    arabic_cjk_risk=scoring_config['arabic_cjk_risk'],
+                    exotic_script_risk=scoring_config.get('exotic_script_risk', scoring_config.get('arabic_cjk_risk', 25)),
+                    special_chars_risk=scoring_config.get('special_chars_risk', 15),
+                    repeating_chars_risk=scoring_config.get('repeating_chars_risk', 5),
                     random_username_risk=scoring_config['random_username_risk']
                 )
                 stats = ScoringStats(
