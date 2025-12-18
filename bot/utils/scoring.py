@@ -29,6 +29,7 @@ class ScoringConfig:
     no_username_risk: int = 15    # штраф за отсутствие username
     weird_name_risk: int = 10    # штраф за отсутствие латиницы/кириллицы в ФИО
     exotic_script_risk: int = 25 # штраф за экзотические письменности (арабская, китайская, эфиопская, тайская и т.д.)
+    special_chars_risk: int = 15 # штраф за специальные символы в имени (>, <, и т.д.)
     repeating_chars_risk: int = 5  # штраф за много повторяющихся символов (jjjjj)
     random_username_risk: int = 15  # штраф за рандомный username (типа Mpib3SFLNYzEzyV)
 
