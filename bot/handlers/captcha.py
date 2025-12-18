@@ -349,6 +349,20 @@ async def handle_text_message(message: Message, bot: Bot):
             message.from_user.username, False, False
         )
         
+        # Отправляем приветствие если настроено
+        if chat_data and chat_data.get('welcome_message'):
+            try:
+                formatted_text = _format_welcome_text(chat_data['welcome_message'], message)
+                welcome_msg = await bot.send_message(
+                    chat_id,
+                    formatted_text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+                asyncio.create_task(delete_message_later(bot, chat_id, welcome_msg.message_id, delay=180))
+            except Exception as e:
+                logger.error(f"Не удалось отправить приветствие: {e}")
+        
         # Проверяем нужна ли автокорректировка скоринга
         if await should_trigger_auto_adjust(chat_id):
             asyncio.create_task(auto_adjust_scoring(chat_id))
