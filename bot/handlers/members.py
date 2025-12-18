@@ -148,13 +148,14 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     # 4. Юзер не бот (ботов сразу кикаем)
     # 5. Юзер прошёл скоринг (или скоринг выключен)
     if is_group and captcha_enabled and not protection_active and not user.is_bot:
-        # Отправляем капчу
+        # Отправляем капчу, передаем уже вычисленный risk_score если он есть
         await send_captcha(
             bot,
             chat.id,
             user.id,
             username=user.username,
             full_name=user.full_name,
+            scoring_score=risk_score if 'risk_score' in locals() else 0,
         )
         # Больше ничего не делаем - ждём прохождения капчи
         return

@@ -378,6 +378,14 @@ async def migrate():
         else:
             print("✓ Таблица pending_captcha уже есть")
         
+        # Добавляем поле scoring_score если его нет
+        cursor = await db.execute("PRAGMA table_info(pending_captcha)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if 'scoring_score' not in columns:
+            print("➕ Добавляем поле scoring_score в pending_captcha...")
+            await db.execute('ALTER TABLE pending_captcha ADD COLUMN scoring_score INTEGER DEFAULT 0')
+            print("✅ Поле scoring_score добавлено")
+        
         # Таблица good_users
         cursor = await db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='good_users'"

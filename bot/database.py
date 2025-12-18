@@ -237,13 +237,13 @@ class Database:
     # === CAPTCHA ===
 
     async def add_pending_captcha(self, chat_id: int, user_id: int, message_id: int, 
-                                  correct_answer: str, expires_at: int):
+                                  correct_answer: str, expires_at: int, scoring_score: int = 0):
         """Добавить юзера в ожидание прохождения капчи"""
         await self._connection.execute('''
             INSERT OR REPLACE INTO pending_captcha 
-            (chat_id, user_id, message_id, correct_answer, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (chat_id, user_id, message_id, correct_answer, int(time.time()), expires_at))
+            (chat_id, user_id, message_id, correct_answer, created_at, expires_at, scoring_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (chat_id, user_id, message_id, correct_answer, int(time.time()), expires_at, scoring_score))
         await self._connection.commit()
 
     async def get_pending_captcha(self, chat_id: int, user_id: int) -> Optional[Dict[str, Any]]:

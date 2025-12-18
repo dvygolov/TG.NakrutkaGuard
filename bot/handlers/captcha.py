@@ -126,9 +126,13 @@ async def send_captcha(
     user_id: int,
     username: Optional[str] = None,
     full_name: Optional[str] = None,
+    scoring_score: int = 0,
 ):
     """
     Отправить капчу пользователю
+    
+    Args:
+        scoring_score: уже вычисленный scoring score (если есть), чтобы не пересчитывать
     
     Returns:
         True если капча отправлена, False если ошибка
@@ -163,7 +167,7 @@ async def send_captcha(
         expires_at = int(time.time()) + 60
         await db.add_pending_captcha(
             chat_id, user_id, message.message_id, 
-            correct_answer, expires_at
+            correct_answer, expires_at, scoring_score
         )
         
         # Запускаем таймер для автобана
@@ -309,27 +313,8 @@ async def handle_text_message(message: Message, bot: Bot):
             chat_data = await db.get_chat(chat_id)
             chat_username = chat_data.get('username') if chat_data else None
             
-            # Вычисляем скор для статистики
-            scoring_score = 0
-            try:
-                scoring_config_data = await db.get_scoring_config(chat_id)
-                if scoring_config_data:
-                    stats_data = await db.get_scoring_stats(chat_id, days=7)
-                    
-                    cfg = ScoringConfig(**scoring_config_data)
-                    stats = ScoringStats(
-                        lang_counts=stats_data['lang_counts'],
-                        total_good_joins=stats_data['total_good_joins'],
-                        p95_id=stats_data['p95_id'],
-                        p99_id=stats_data['p99_id']
-                    )
-                    
-                    scoring_score = score_user(
-                        user, photo_count=photo_count, cfg=cfg, stats=stats,
-                        chat_id=chat_id, chat_username=chat_username
-                    )
-            except Exception as e:
-                logger.error(f"Не удалось вычислить скор для good_user {user_id}: {e}")
+            # Используем уже вычисленный scoring_score из pending (не пересчитываем!)
+            scoring_score = pending.get('scoring_score', 0)
             
             await db.add_good_user(
                 chat_id, user.id,
@@ -468,27 +453,8 @@ async def handle_captcha_answer_deprecated(callback: CallbackQuery, bot: Bot):
             chat_data = await db.get_chat(chat_id)
             chat_username = chat_data.get('username') if chat_data else None
             
-            # Вычисляем скор для статистики
-            scoring_score = 0
-            try:
-                scoring_config_data = await db.get_scoring_config(chat_id)
-                if scoring_config_data:
-                    stats_data = await db.get_scoring_stats(chat_id, days=7)
-                    
-                    cfg = ScoringConfig(**scoring_config_data)
-                    stats = ScoringStats(
-                        lang_counts=stats_data['lang_counts'],
-                        total_good_joins=stats_data['total_good_joins'],
-                        p95_id=stats_data['p95_id'],
-                        p99_id=stats_data['p99_id']
-                    )
-                    
-                    scoring_score = score_user(
-                        user, photo_count=photo_count, cfg=cfg, stats=stats,
-                        chat_id=chat_id, chat_username=chat_username
-                    )
-            except Exception as e:
-                logger.error(f"Не удалось вычислить скор для good_user {user_id}: {e}")
+            # Используем уже вычисленный scoring_score из pending (не пересчитываем!)
+            scoring_score = pending.get('scoring_score', 0)
             
             await db.add_good_user(
                 chat_id, user.id,
