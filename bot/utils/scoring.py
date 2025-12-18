@@ -26,10 +26,11 @@ class ScoringConfig:
     premium_bonus: int = -20     # сколько вычитаем за премиум
     no_avatar_risk: int = 15     # штраф за 0 аватаров
     one_avatar_risk: int = 5     # штраф за 1 аватар (подозрительно)
-    no_username_risk: int = 5    # штраф за отсутствие username
+    no_username_risk: int = 15    # штраф за отсутствие username
     weird_name_risk: int = 10    # штраф за отсутствие латиницы/кириллицы в ФИО
-    arabic_cjk_risk: int = 25    # штраф за арабские/китайские символы в имени
-    random_username_risk: int = 10  # штраф за рандомный username (user12345, qwerty777)
+    exotic_script_risk: int = 25 # штраф за экзотические письменности (арабская, китайская, эфиопская, тайская и т.д.)
+    repeating_chars_risk: int = 5  # штраф за много повторяющихся символов (jjjjj)
+    random_username_risk: int = 15  # штраф за рандомный username (типа Mpib3SFLNYzEzyV)
 
 
 @dataclass
@@ -50,13 +51,29 @@ class ScoringStats:
 
 LANG_CODE_RE = re.compile(r"^[a-zA-Z]{2,3}")       # выцепляем базовый язык из 'en-US' и т.п.
 NAME_HAS_LAT_CYR_RE = re.compile(r"[A-Za-zА-Яа-я]")  # проверка ФИО на латиницу/кириллицу
-NAME_HAS_ARABIC_RE = re.compile(r"[\u0600-\u06FF]")  # арабские символы
-NAME_HAS_CJK_RE = re.compile(r"[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]")  # китайские/японские/корейские
 
-# Экспортируем для использования в других модулях (например, для логирования failed captcha)
-LATIN_CYRILLIC_REGEX = NAME_HAS_LAT_CYR_RE
-ARABIC_CJK_REGEX = re.compile(r"[\u0600-\u06FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]")  # арабские + CJK
+# Экзотические письменности (арабская, CJK, эфиопская, тайская, бенгальская и т.д.)
+NAME_EXOTIC_SCRIPT_RE = re.compile(
+    r"["
+    r"\u0600-\u06FF"      # Arabic
+    r"\u4E00-\u9FFF"      # CJK Unified Ideographs
+    r"\u3040-\u309F"      # Hiragana
+    r"\u30A0-\u30FF"      # Katakana
+    r"\uAC00-\uD7AF"      # Hangul (Korean)
+    r"\u1200-\u137F"      # Ethiopic
+    r"\u0E00-\u0E7F"      # Thai
+    r"\u0980-\u09FF"      # Bengali
+    r"\u0A00-\u0A7F"      # Gurmukhi
+    r"\u0D00-\u0D7F"      # Malayalam
+    r"\u0C80-\u0CFF"      # Kannada
+    r"\u0B00-\u0B7F"      # Oriya
+    r"\u0780-\u07BF"      # Thaana
+    r"\u1100-\u11FF"      # Hangul Jamo
+    r"]"
+)
 
+# Специальные/подозрительные символы (не буквы, не цифры, не стандартные пробелы/дефисы)
+NAME_SPECIAL_CHARS_RE = re.compile(r"[<>«»@#$%^&*+=\[\]{}|\\`~]")
 
 def _normalize_lang(lang: Optional[str]) -> Optional[str]:
     if not lang:
@@ -69,7 +86,7 @@ def _compute_lang_risk(user_lang: Optional[str],
                        cfg: ScoringConfig,
                        stats: ScoringStats) -> int:
     """
-    Новая логика языкового риска:
+    Логика языкового риска:
     - Нет языка → no_lang_risk (штраф)
     - Язык в распределении → бонус пропорционально популярности: -(share * max_lang_risk)
     - Редкий/неожиданный язык → max_lang_risk (штраф)
@@ -186,37 +203,56 @@ def score_user(
         details["username"] = username
         details["username_risk"] = 0
         
-        # 3a. Проверка username на рандомность (user12345, qwerty777)
-        # Вместо бинарной проверки используем градацию: чем выше вероятность рандомности, тем больше риск
-        randomness = username_randomness(username, threshold=0.70)
-        random_risk = int(cfg.random_username_risk * randomness.score)
-        score += random_risk
-        
-        details["random_username"] = randomness.is_randomish
-        details["random_username_score"] = randomness.score
-        details["random_username_risk_applied"] = random_risk
-        if randomness.score >= 0.5:  # Записываем фичи если подозрительно
-            details["random_username_features"] = randomness.features
+        # 3a. Проверка username на рандомность
+        randomness = username_randomness(username, threshold=0.60)
+        if randomness.is_randomish:
+            score += cfg.random_username_risk
+            details["random_username_risk"] = cfg.random_username_risk
+            details["random_username_score"] = randomness.score
+        else:
+            details["random_username_risk"] = 0
 
     # 4. ФИО – проверка символов
     full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
     has_normal_letters = _has_lat_or_cyrillic(full_name)
-    has_arabic = bool(NAME_HAS_ARABIC_RE.search(full_name))
-    has_cjk = bool(NAME_HAS_CJK_RE.search(full_name))
+    has_exotic_script = bool(NAME_EXOTIC_SCRIPT_RE.search(full_name))
+    has_special_chars = bool(NAME_SPECIAL_CHARS_RE.search(full_name))
+    
+    # Подсчёт повторяющихся символов (jjjjj, ааааа)
+    max_repeat = 1
+    if len(full_name) > 1:
+        current_char = full_name[0].lower()
+        current_count = 1
+        for char in full_name[1:]:
+            if char.lower() == current_char and char.isalnum():
+                current_count += 1
+                max_repeat = max(max_repeat, current_count)
+            else:
+                current_char = char.lower()
+                current_count = 1
     
     # Отсутствие рус/англ букв = подозрительно
     if not has_normal_letters:
         score += cfg.weird_name_risk
     
-    # Наличие арабских или CJK символов = очень подозрительно
-    if has_arabic or has_cjk:
-        score += cfg.arabic_cjk_risk
+    # Наличие экзотических письменностей = очень подозрительно
+    if has_exotic_script:
+        score += cfg.exotic_script_risk
+    
+    # Специальные символы (>, <, и т.д.) = подозрительно
+    if has_special_chars:
+        score += cfg.special_chars_risk
+    
+    # Много повторяющихся символов (5+ подряд) = подозрительно
+    if max_repeat >= 5:
+        score += cfg.repeating_chars_risk
     
     details["full_name"] = full_name
     details["weird_name_risk"] = 0 if has_normal_letters else cfg.weird_name_risk
-    details["arabic_cjk_risk"] = cfg.arabic_cjk_risk if (has_arabic or has_cjk) else 0
-    details["has_arabic"] = has_arabic
-    details["has_cjk"] = has_cjk
+    details["exotic_script_risk"] = cfg.exotic_script_risk if has_exotic_script else 0
+    details["special_chars_risk"] = cfg.special_chars_risk if has_special_chars else 0
+    details["repeating_chars_risk"] = cfg.repeating_chars_risk if max_repeat >= 5 else 0
+    details["max_char_repeat"] = max_repeat
 
     # 5. Новизна ID
     id_risk = _compute_id_risk(user.id, cfg, stats)

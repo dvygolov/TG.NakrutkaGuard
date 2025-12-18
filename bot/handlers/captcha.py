@@ -8,7 +8,7 @@ from bot.database import db
 from bot.utils.captcha import captcha_gen
 from bot.utils.logger import chat_logger
 from bot.utils.message_utils import delete_message_later
-from bot.utils.scoring import score_user, ScoringConfig, ScoringStats, LATIN_CYRILLIC_REGEX, ARABIC_CJK_REGEX
+from bot.utils.scoring import score_user, ScoringConfig, ScoringStats 
 from bot.utils.scoring_auto_adjust import auto_adjust_scoring, should_trigger_auto_adjust
 import time
 import html

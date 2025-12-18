@@ -1,5 +1,3 @@
-import math
-import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -12,97 +10,84 @@ class UsernameRandomnessResult:
     features: Dict[str, Any]  # диагностические метрики
 
 
-_ALNUM_UND_RE = re.compile(r"^[A-Za-z0-9_]+$")  # типичный телеграм-алфавит
 _VOWELS = set("aeiou")
-_COMMON_BIGRAMS = {
-    # небольшой "якорный" набор частых биграмм в английских словах
-    "th", "he", "in", "er", "an", "re", "on", "at", "en", "nd", "ti", "es", "or", "te", "of"
-}
-_COMMON_WORD_FRAGS = {
-    # короткие фрагменты/морфемы, которые часто встречаются в осмысленных никах
-    "alex", "max", "john", "mike", "anna", "kate", "nick", "pro", "boss", "team", "shop", "bet", "win"
-}
 
 
-def _shannon_entropy(s: str) -> float:
+def _cls(ch: str, underscore_as_own: bool) -> str:
+    """Класс символа: D=digit, U=upper, L=lower, _=underscore, O=other"""
+    if ch.isdigit():
+        return "D"
+    if ch.isalpha():
+        return "U" if ch.isupper() else "L"
+    if underscore_as_own and ch == "_":
+        return "_"
+    return "O"
+
+
+def _transition_rate(s: str, underscore_as_own: bool) -> float:
     """
-    Энтропия Шеннона (бит/символ). Для равномерных строк растёт.
+    Доля переходов между классами символов.
+    0.0 = все одного класса, 1.0 = каждый символ меняет класс.
     """
+    if len(s) <= 1:
+        return 0.0
+    prev = _cls(s[0], underscore_as_own)
+    transitions = 0
+    for ch in s[1:]:
+        cur = _cls(ch, underscore_as_own)
+        if cur != prev:
+            transitions += 1
+        prev = cur
+    return transitions / (len(s) - 1)
+
+
+def _max_same_run(s: str) -> int:
+    """Максимальная длина подряд одинаковых символов."""
+    if not s:
+        return 0
+    best = 1
+    cur = 1
+    low = s.lower()
+    for i in range(1, len(low)):
+        if low[i] == low[i - 1]:
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 1
+    return best
+
+
+def _dominant_char_ratio(s: str) -> float:
+    """Доля самого частого символа (чем больше, тем меньше "рандом")."""
     if not s:
         return 0.0
-    counts = Counter(s)
-    n = len(s)
-    ent = 0.0
-    for c in counts.values():
-        p = c / n
-        ent -= p * math.log2(p)
-    return ent
+    c = Counter(s.lower())
+    return max(c.values()) / len(s)
 
 
-def _char_type_run_count(s: str) -> int:
-    """
-    Кол-во смен "типа" символов: letter/digit/underscore/other.
-    У "a1b2c3" будет много смен.
-    """
-    def t(ch: str) -> str:
-        if ch.isalpha():
-            return "L"
-        if ch.isdigit():
-            return "D"
-        if ch == "_":
-            return "_"
-        return "O"
-
-    if not s:
-        return 0
-    runs = 1
-    prev = t(s[0])
-    for ch in s[1:]:
-        cur = t(ch)
-        if cur != prev:
-            runs += 1
-            prev = cur
-    return runs
-
-
-def _case_switch_count(s: str) -> int:
-    """
-    Кол-во смен регистра в буквах: Upper↔Lower.
-    У "YAdBIOHobLc91Vp" будет много смен (рандомный паттерн).
-    """
-    if not s:
-        return 0
-    
-    switches = 0
-    prev_case = None
-    
-    for ch in s:
-        if ch.isalpha():
-            cur_case = "U" if ch.isupper() else "L"
-            if prev_case is not None and cur_case != prev_case:
-                switches += 1
-            prev_case = cur_case
-    
-    return switches
-
-
-def _has_common_patterns(s: str) -> bool:
-    low = s.lower()
-    if any(frag in low for frag in _COMMON_WORD_FRAGS):
-        return True
-    # биграммы
-    bigrams = {low[i:i+2] for i in range(len(low) - 1)}
-    return len(bigrams & _COMMON_BIGRAMS) >= 1
+def _vowel_ratio(s: str) -> float:
+    """Доля гласных среди букв (если букв нет — 0)."""
+    letters = [ch.lower() for ch in s if ch.isalpha()]
+    if not letters:
+        return 0.0
+    v = sum(ch in _VOWELS for ch in letters)
+    return v / len(letters)
 
 
 def username_randomness(
     username: Optional[str],
-    threshold: float = 0.70
+    threshold: float = 0.70,
+    underscore_as_own: bool = False
 ) -> UsernameRandomnessResult:
     """
-    Оценивает, похож ли username на рандомный набор латиницы/цифр.
-    Возвращает score 0..1 (чем выше, тем подозрительнее).
+    Упрощённый скорер "рандомности" для username.
+    Признаки:
+      - transition_rate: смены lower/upper/digit (и _, опционально)
+      - vowel_ratio: низкая доля гласных повышает score
+      - repeats: повторы снижают score (т.к. это скорее "паттерн", чем равномерный рандом)
+      - dominant_char_ratio: высокая концентрация снижает score
 
+    score 0..1: выше = более "рандомно".
     threshold — порог, по которому выставляется is_randomish.
     """
     if not username:
@@ -113,97 +98,80 @@ def username_randomness(
         )
 
     s = username.strip()
-    low = s.lower()
     n = len(s)
+    if n == 0:
+        return UsernameRandomnessResult(
+            score=0.0,
+            is_randomish=False,
+            features={"reason": "empty"}
+        )
 
-    # Базовые доли
-    letters = sum(ch.isalpha() for ch in s)
-    digits = sum(ch.isdigit() for ch in s)
-    underscores = s.count("_")
-    others = n - letters - digits - underscores
+    tr = _transition_rate(s, underscore_as_own)  # 0..1
+    vr = _vowel_ratio(s)                         # 0..1
+    max_run = _max_same_run(s)                   # 1..n
+    dom = _dominant_char_ratio(s)                # 1/n..1
 
-    frac_digits = digits / n
-    frac_letters = letters / n
-    frac_other = others / n
+    # 1) Смена классов — ключевой драйвер "рандома"
+    # Усиливаем эффект степенью: низкие значения ещё ниже, высокие ещё выше.
+    tr_component = tr ** 0.65
 
-    # Сигналы "рандома"
-    ent = _shannon_entropy(low)              # 0..~5
-    ent_norm = min(ent / 4.2, 1.0)           # грубая нормализация под a-z0-9_
-    runs = _char_type_run_count(s)
-    runs_norm = min((runs - 1) / max(n - 1, 1), 1.0)  # доля смен типа
-    
-    # Смены регистра (YAdBIOHobLc91Vp = много смен = подозрительно)
-    case_switches = _case_switch_count(s)
-    case_switches_norm = min(case_switches / max(letters - 1, 1), 1.0) if letters > 1 else 0.0
+    # 2) Гласные: "рандомный" ник часто с малым числом гласных.
+    # Преобразуем в "нехватку гласных": 1 - vr
+    # И добавим мягкий порог: если vr > 0.35, снижаем рандомность сильнее.
+    vowel_lack = 1.0 - vr
+    if vr > 0.35:
+        vowel_lack *= 0.75
+    vowel_component = min(max(vowel_lack, 0.0), 1.0)
 
-    # Вокалы: у "словоподобных" никнеймов обычно есть гласные
-    vowel_cnt = sum((ch in _VOWELS) for ch in low if "a" <= ch <= "z")
-    vowel_ratio = vowel_cnt / max(letters, 1) if letters else 0.0
-    low_vowels = 1.0 if (letters >= 5 and vowel_ratio < 0.20) else 0.0
+    # 3) Повторы: длинные повторы и высокая доминация символа — это скорее паттерн.
+    # Поэтому это "штрафы" (penalty), которые вычитаются.
+    # max_run >= 4 — ощутимый штраф, >=6 — сильный.
+    if max_run <= 2:
+        repeat_penalty = 0.0
+    elif max_run == 3:
+        repeat_penalty = 0.10
+    elif max_run == 4:
+        repeat_penalty = 0.20
+    elif max_run == 5:
+        repeat_penalty = 0.30
+    else:
+        repeat_penalty = 0.45
 
-    # Повторы / паттерны: 111, aaaa, ababab
-    max_run_same = 1
-    cur_run = 1
-    for i in range(1, n):
-        if low[i] == low[i-1]:
-            cur_run += 1
-            max_run_same = max(max_run_same, cur_run)
-        else:
-            cur_run = 1
-    repeated_chars_penalty = 1.0 if max_run_same >= 4 else 0.0  # часто у ботов бывает "xxxx" или "1111"
+    # Доминирующий символ: если > 0.25, это уже не очень "равномерно"
+    dom_penalty = 0.0
+    if dom > 0.35:
+        dom_penalty = 0.25
+    elif dom > 0.28:
+        dom_penalty = 0.18
+    elif dom > 0.22:
+        dom_penalty = 0.10
 
-    # "Словоподобность" (смягчаем скор, если есть признаки осмысленного ника)
-    has_common = _has_common_patterns(s)
-    common_bonus = 0.15 if has_common else 0.0
-
-    # Telegram username обычно a-z0-9_ (без других символов) — если "другие" есть, это само по себе подозрительно,
-    # но это уже не "рандомный алнум", поэтому даём отдельный флаг.
-    is_alnum_und = bool(_ALNUM_UND_RE.match(s))
-
-    # Логика скоринга: взвешенная сумма сигналов
-    # Основные драйверы: много цифр, высокая энтропия, много смен типов, мало гласных, смены регистра.
+    # 4) Итоговый score: только нужные признаки.
+    # Весами можно управлять под ваши данные.
     score = 0.0
-    score += 0.28 * ent_norm
-    score += 0.22 * min(frac_digits / 0.6, 1.0)     # 0..1, если цифр >=60% => 1
-    score += 0.18 * runs_norm
-    score += 0.12 * case_switches_norm              # YAdBIOHobLc91Vp = много смен = подозрительно
-    score += 0.12 * low_vowels
-    score += 0.08 * repeated_chars_penalty
+    score += 0.60 * tr_component
+    score += 0.40 * vowel_component
+    score -= repeat_penalty
+    score -= dom_penalty
 
-    # Штраф за "другие символы" (не underscore/латиница/цифры)
-    # Это больше про общий риск, но пусть поднимет скор.
-    score += 0.25 * min(frac_other / 0.2, 1.0)
-
-    # Смягчение, если ник похож на "человеческий"
-    score = max(0.0, score - common_bonus)
-
-    # Короткие имена не пытаемся "сильно банить" — слишком много FP.
-    if n <= 5:
-        score *= 0.65
+    # 5) Нормализация по длине: слишком короткие строки трудно уверенно оценивать.
+    if n <= 6:
+        score *= 0.75
+    elif n <= 9:
+        score *= 0.90
 
     score = max(0.0, min(score, 1.0))
-
-    features = {
-        "len": n,
-        "frac_digits": round(frac_digits, 3),
-        "frac_letters": round(frac_letters, 3),
-        "frac_other": round(frac_other, 3),
-        "entropy": round(ent, 3),
-        "entropy_norm": round(ent_norm, 3),
-        "type_runs": runs,
-        "type_runs_norm": round(runs_norm, 3),
-        "case_switches": case_switches,
-        "case_switches_norm": round(case_switches_norm, 3),
-        "vowel_ratio": round(vowel_ratio, 3),
-        "low_vowels_flag": bool(low_vowels),
-        "max_same_char_run": max_run_same,
-        "repeated_chars_flag": bool(repeated_chars_penalty),
-        "has_common_patterns": has_common,
-        "is_alnum_underscore": is_alnum_und,
-    }
 
     return UsernameRandomnessResult(
         score=score,
         is_randomish=(score >= threshold),
-        features=features
+        features={
+            "len": n,
+            "transition_rate": round(tr, 3),
+            "vowel_ratio": round(vr, 3),
+            "max_same_run": max_run,
+            "dominant_char_ratio": round(dom, 3),
+            "repeat_penalty": repeat_penalty,
+            "dominant_penalty": dom_penalty,
+        },
     )

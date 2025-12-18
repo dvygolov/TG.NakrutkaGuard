@@ -29,7 +29,8 @@
             "program": "${workspaceFolder}/test_username_analysis.py",
             "console": "integratedTerminal",
             "justMyCode": true,
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe"
         }
     ]
 }
