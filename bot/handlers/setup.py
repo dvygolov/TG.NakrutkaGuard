@@ -277,12 +277,15 @@ async def cmd_unban(message: Message, bot: Bot):
         try:
             user_chat = await bot.get_chat(username)
             user_id = user_chat.id
-        except Exception as e:
-            await bot.send_message(
-                message.from_user.id,
-                f"Не удалось найти пользователя {html.escape(username)}: {e}"
-            )
-            return
+        except Exception:
+            user_id = await db.find_user_id_by_username(message.chat.id, username)
+            if not user_id:
+                await bot.send_message(
+                    message.from_user.id,
+                    f"Не удалось найти пользователя {html.escape(username)}. "
+                    "Укажите user_id: /unban 123456789"
+                )
+                return
 
     try:
         await bot.unban_chat_member(message.chat.id, user_id)

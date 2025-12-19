@@ -179,6 +179,23 @@ class Database:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
+    async def find_user_id_by_username(self, chat_id: int, username: str) -> Optional[int]:
+        """Найти user_id по username в пределах чата."""
+        normalized = username.lstrip("@").lower()
+        query = (
+            "SELECT user_id, failed_at AS ts FROM failed_users "
+            "WHERE chat_id = ? AND lower(username) = ? "
+            "UNION ALL "
+            "SELECT user_id, verified_at AS ts FROM good_users "
+            "WHERE chat_id = ? AND lower(username) = ? "
+            "ORDER BY ts DESC LIMIT 1"
+        )
+        async with self._connection.execute(
+            query, (chat_id, normalized, chat_id, normalized)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return int(row["user_id"]) if row else None
+
     async def remove_chat(self, chat_id: int):
         """Удалить чат из защиты"""
         await self._connection.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
