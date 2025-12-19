@@ -230,37 +230,64 @@ def score_user(
     score += id_risk
     details["id_risk"] = id_risk
 
+    score_raw = score
+
     # нормализуем итог: 0–100
     score = max(0, min(100, score))
     details["final_score"] = score
     details["user_id"] = user.id
+
+    risk_keys = (
+        "lang_risk",
+        "avatar_risk",
+        "username_risk",
+        "random_username_risk",
+        "weird_name_risk",
+        "exotic_script_risk",
+        "special_chars_risk",
+        "repeating_chars_risk",
+        "id_risk",
+    )
+    premium_bonus = cfg.premium_bonus if is_premium else 0
+    score_components = []
+    if premium_bonus != 0:
+        score_components.append(("premium_bonus", premium_bonus))
+    score_components.extend(
+        (risk_key, details.get(risk_key, 0))
+        for risk_key in risk_keys
+        if details.get(risk_key, 0) != 0
+    )
+
+    score_formula = (
+        " + ".join(f"{key}({value})" for key, value in score_components)
+        if score_components
+        else "0"
+    )
+    score_equation = f"clamp({score_formula})" if score_raw != score else score_formula
+
+    log_message = (
+        "USER_SCORE premium=%s lang=%s avatars=%d username=%s full_name=%r user_id=%d "
+        "score (%d) = %s"
+    )
+    log_args = (
+        is_premium,
+        lang,
+        photo_count,
+        details.get("username"),
+        full_name,
+        user.id,
+        score,
+        score_equation,
+    )
 
     # лог с именем чата для удобства
     if chat_username or chat_id:
         # Используем отдельный логгер с именем чата
         chat_log_name = chat_username if chat_username else f"chat_{abs(chat_id)}"
         chat_logger = logging.getLogger(chat_log_name)
-        chat_logger.info(
-            "USER_SCORE id=%s username=%s lang=%s premium=%s avatars=%d score=%d details=%s",
-            user.id,
-            user.username,
-            lang,
-            is_premium,
-            photo_count,
-            score,
-            details,
-        )
+        chat_logger.info(log_message, *log_args)
     else:
         # Fallback на обычный логгер
-        logger.info(
-            "USER_SCORE id=%s username=%s lang=%s premium=%s avatars=%d score=%d details=%s",
-            user.id,
-            user.username,
-            lang,
-            is_premium,
-            photo_count,
-            score,
-            details,
-        )
+        logger.info(log_message, *log_args)
 
     return score
