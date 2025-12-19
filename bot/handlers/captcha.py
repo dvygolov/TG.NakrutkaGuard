@@ -33,6 +33,12 @@ def _parse_captcha_answer(text: str) -> Optional[str]:
     return cleaned if cleaned else None
 
 
+def _is_not_command(message: Message) -> bool:
+    """True if message text does not start with a slash command."""
+    text = message.text or ""
+    return not text.startswith("/")
+
+
 async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
     """
     Логировать пользователя, не прошедшего капчу.
@@ -256,7 +262,7 @@ async def _captcha_timeout_handler(bot: Bot, chat_id: int, user_id: int, message
         traceback.print_exc()
 
 
-@router.message(F.text)
+@router.message(F.text, _is_not_command)
 async def handle_text_message(message: Message, bot: Bot):
     """
     Обработчик всех текстовых сообщений - проверяем, это ответ на капчу или нет.

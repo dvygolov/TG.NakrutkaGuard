@@ -31,5 +31,6 @@
     },
     "terminal.integrated.env.windows": {
         "PYTHONPATH": "${workspaceFolder}"
-    }
+    },
+    "chatgpt.commentCodeLensEnabled": false
 }

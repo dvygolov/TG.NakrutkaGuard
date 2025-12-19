@@ -233,6 +233,72 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+def _extract_unban_target(message: Message) -> Optional[str]:
+    text = message.text or ""
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    return parts[1].strip()
+
+
+def _normalize_username(value: str) -> str:
+    return value if value.startswith("@") else f"@{value}"
+
+
+@router.message(Command("unban"))
+async def cmd_unban(message: Message, bot: Bot):
+    """Админская команда /unban @username|user_id для разбана пользователя в чате."""
+    if not is_admin(message.from_user.id):
+        return
+
+    # Удаляем команду из чата сразу
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        pass
+
+    if message.chat.type not in {"group", "supergroup"}:
+        await bot.send_message(message.from_user.id, "Команда /unban работает только в группах.")
+        return
+
+    target = _extract_unban_target(message)
+    if not target:
+        await bot.send_message(
+            message.from_user.id,
+            "Укажите пользователя: /unban @username или /unban 123456789"
+        )
+        return
+
+    user_id: Optional[int] = None
+    if target.lstrip("-").isdigit():
+        user_id = int(target)
+    else:
+        username = _normalize_username(target)
+        try:
+            user_chat = await bot.get_chat(username)
+            user_id = user_chat.id
+        except Exception as e:
+            await bot.send_message(
+                message.from_user.id,
+                f"Не удалось найти пользователя {html.escape(username)}: {e}"
+            )
+            return
+
+    try:
+        await bot.unban_chat_member(message.chat.id, user_id)
+        chat_title = message.chat.title or str(message.chat.id)
+        await bot.send_message(
+            message.from_user.id,
+            f"Разбан выполнен: пользователь {user_id} в чате {html.escape(chat_title)}."
+        )
+    except Exception as e:
+        chat_title = message.chat.title or str(message.chat.id)
+        await bot.send_message(
+            message.from_user.id,
+            f"Не удалось разбанить {user_id} в чате {html.escape(chat_title)}: {e}"
+        )
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     """Команда /start"""
