@@ -64,6 +64,7 @@ async def _log_failed_captcha_user(bot: Bot, chat_id: int, user_id: int):
                 cfg = ScoringConfig(
                     lang_distribution=scoring_config['lang_distribution'],
                     max_lang_risk=scoring_config['max_lang_risk'],
+                    no_lang_risk=scoring_config['no_lang_risk'],
                     max_id_risk=scoring_config['max_id_risk'],
                     premium_bonus=scoring_config['premium_bonus'],
                     no_avatar_risk=scoring_config['no_avatar_risk'],

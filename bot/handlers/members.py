@@ -66,6 +66,9 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     captcha_enabled = chat_data and chat_data.get('captcha_enabled', False)
     protection_active = chat_data and chat_data.get('protection_active', False)
     scoring_enabled = chat_data and chat_data.get('scoring_enabled', False)
+
+    chat_log_name = chat.username if chat.username else f"chat_{abs(chat.id)}"
+    chat_log = logging.getLogger(chat_log_name)
     
     # Скоринг работает только в обычном режиме (не в атаке)
     if scoring_enabled and not protection_active and not user.is_bot:
@@ -79,7 +82,7 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                     photos = await bot.get_user_profile_photos(user.id, limit=100)
                     photo_count = photos.total_count
                 except Exception as e:
-                    logger.warning(f"Не удалось получить фото профиля для {user.id}: {e}")
+                    chat_log.warning(f"Не удалось получить фото профиля для {user.id}: {e}")
                 
                 # Получаем статистику
                 stats_data = await db.get_scoring_stats(chat.id, days=7)
@@ -134,11 +137,11 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                             photo_count,
                             scoring_score=risk_score
                         )
-                    logger.info(
+                    chat_log.info(
                         f"Юзер {user.id} прошёл скоринг: score={risk_score} <= threshold={scoring_config_data['threshold']}"
                     )
         except Exception as e:
-            logger.error(f"Ошибка скоринга для {user.id}: {e}", exc_info=True)
+            chat_log.error(f"Ошибка скоринга для {user.id}: {e}", exc_info=True)
     
     # Показываем капчу если:
     # 1. Это группа (не канал)
