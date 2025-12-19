@@ -149,10 +149,26 @@ async def _save_stop_words_setting(chat_id: int, value: Optional[List[str]]) -> 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     """Главное меню настроек"""
-    buttons = [
-        [InlineKeyboardButton(text="➕ Добавить чат", callback_data="add_chat")],
-        [InlineKeyboardButton(text="📋 Список чатов", callback_data="list_chats")],
-    ]
+    raise RuntimeError("get_main_menu_keyboard is async; call await get_main_menu_keyboard()")
+
+
+async def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Главное меню настроек"""
+    chats = await db.get_all_chats()
+
+    buttons = []
+    if chats:
+        for chat in chats:
+            status = "🟢" if chat['protection_active'] else "⚪️"
+            name = chat['username'] if chat['username'] else chat['title'][:20]
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"{status} {name}",
+                    callback_data=f"chat_{chat['chat_id']}"
+                )
+            ])
+
+    buttons.append([InlineKeyboardButton(text="➕ Добавить чат/канал", callback_data="add_chat")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -227,8 +243,8 @@ async def cmd_start(message: Message):
     await message.answer(
         "🛡 <b>Nakrutka Guard Bot</b>\n\n"
         "Бот для защиты телеграм-групп и каналов от накрутки.\n\n"
-        "Используйте меню ниже для управления:",
-        reply_markup=get_main_menu_keyboard(),
+        "Выберите чат или канал для настройки:",
+        reply_markup=await get_main_menu_keyboard(),
         parse_mode="HTML"
     )
 
@@ -238,10 +254,15 @@ async def show_main_menu(callback: CallbackQuery):
     """Показать главное меню"""
     await callback.message.edit_text(
         "🛡 <b>Nakrutka Guard Bot</b>\n\n"
-        "Выберите действие:",
-        reply_markup=get_main_menu_keyboard(),
+        "Выберите чат для настройки:",
+        reply_markup=await get_main_menu_keyboard(),
         parse_mode="HTML"
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "noop")
+async def noop_callback(callback: CallbackQuery):
     await callback.answer()
 
 
@@ -306,7 +327,7 @@ async def process_chat_id(message: Message, state: FSMContext):
         f"⚠️ <b>Важно!</b> Убедитесь, что бот добавлен в чат/канал с правами администратора "
         f"(включая право на удаление пользователей).",
         parse_mode="HTML",
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=await get_main_menu_keyboard()
     )
     
     await state.clear()

@@ -69,6 +69,54 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
 
     chat_log_name = chat.username if chat.username else f"chat_{abs(chat.id)}"
     chat_log = logging.getLogger(chat_log_name)
+
+    # Если началась атака
+    if result['attack_started']:
+        # Уведомляем админов
+        time_window = (await db.get_chat(chat.id))['time_window']
+        recent_joins = join_counter.count_in_window(chat.id, time_window)
+        message = await detector.get_attack_start_message(chat.id, recent_joins)
+        await notify_admins(bot, chat.id, message)
+
+        # Кикаем всех из окна
+        if 'users_to_kick' in result:
+            kick_tasks = []
+            for user_id in result['users_to_kick']:
+                kick_tasks.append(kick_user_safe(bot, chat.id, user_id))
+                chat_logger.log_kick(chat.id, chat.username, user_id, None, "attack_window")
+
+            # Выполняем кики параллельно (батчами по 50)
+            kicked_count = 0
+            for i in range(0, len(kick_tasks), 50):
+                batch = kick_tasks[i:i+50]
+                results = await asyncio.gather(*batch, return_exceptions=True)
+                # Считаем успешные кики
+                kicked_count += sum(1 for r in results if r is True)
+                # Небольшая задержка между батчами чтобы не словить rate limit
+                if i + 50 < len(kick_tasks):
+                    await asyncio.sleep(1)
+
+            # Обновляем счётчик кикнутых в БД
+            for _ in range(kicked_count):
+                await db.increment_kicked(chat.id)
+
+    # Если атака закончилась
+    if result['attack_ended']:
+        # Уведомляем админов
+        message = result.get('attack_end_message') or await detector.get_attack_stats_message(chat.id)
+        if message:
+            await notify_admins(bot, chat.id, message)
+
+    # Если нужно кикнуть текущего пользователя
+    # Важно: если атака только что завершилась на этом join'е, не кикаем текущего
+    if result['should_kick'] and not result['attack_ended']:
+        success = await kick_user_safe(bot, chat.id, user.id)
+        if success:
+            chat_logger.log_kick(
+                chat.id, chat.username, user.id,
+                user.username, result['reason']
+            )
+        return
     
     # Скоринг работает только в обычном режиме (не в атаке)
     if scoring_enabled and not protection_active and not user.is_bot:
@@ -161,52 +209,6 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
         )
         # Больше ничего не делаем - ждём прохождения капчи
         return
-    
-    # Если началась атака
-    if result['attack_started']:
-        # Уведомляем админов
-        time_window = (await db.get_chat(chat.id))['time_window']
-        recent_joins = join_counter.count_in_window(chat.id, time_window)
-        message = await detector.get_attack_start_message(chat.id, recent_joins)
-        await notify_admins(bot, chat.id, message)
-        
-        # Кикаем всех из окна
-        if 'users_to_kick' in result:
-            kick_tasks = []
-            for user_id in result['users_to_kick']:
-                kick_tasks.append(kick_user_safe(bot, chat.id, user_id))
-                chat_logger.log_kick(chat.id, chat.username, user_id, None, "attack_window")
-            
-            # Выполняем кики параллельно (батчами по 50)
-            kicked_count = 0
-            for i in range(0, len(kick_tasks), 50):
-                batch = kick_tasks[i:i+50]
-                results = await asyncio.gather(*batch, return_exceptions=True)
-                # Считаем успешные кики
-                kicked_count += sum(1 for r in results if r is True)
-                # Небольшая задержка между батчами чтобы не словить rate limit
-                if i + 50 < len(kick_tasks):
-                    await asyncio.sleep(1)
-            
-            # Обновляем счётчик кикнутых в БД
-            for _ in range(kicked_count):
-                await db.increment_kicked(chat.id)
-    
-    # Если атака закончилась
-    if result['attack_ended']:
-        # Уведомляем админов
-        message = result.get('attack_end_message') or await detector.get_attack_stats_message(chat.id)
-        if message:
-            await notify_admins(bot, chat.id, message)
-    
-    # Если нужно кикнуть текущего пользователя
-    if result['should_kick']:
-        success = await kick_user_safe(bot, chat.id, user.id)
-        if success:
-            chat_logger.log_kick(
-                chat.id, chat.username, user.id, 
-                user.username, result['reason']
-            )
 
 
 @router.chat_member(ChatMemberUpdatedFilter(member_status_changed=[LEFT, KICKED]))
