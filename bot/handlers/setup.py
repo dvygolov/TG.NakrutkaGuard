@@ -1,7 +1,7 @@
 from typing import Optional, List, Callable, Awaitable, Any
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from bot.database import db
@@ -289,10 +289,31 @@ async def cmd_unban(message: Message, bot: Bot):
 
     try:
         await bot.unban_chat_member(message.chat.id, user_id)
+        unrestrict_note = ""
+        try:
+            chat_info = await bot.get_chat(message.chat.id)
+            permissions = chat_info.permissions
+            if permissions is None:
+                permissions = ChatPermissions(
+                    can_send_messages=True,
+                    can_send_media_messages=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True,
+                    can_send_polls=True,
+                    can_invite_users=True,
+                )
+            await bot.restrict_chat_member(
+                message.chat.id,
+                user_id,
+                permissions=permissions
+            )
+            unrestrict_note = " Ограничения сняты."
+        except Exception as e:
+            unrestrict_note = f" Ограничения снять не удалось: {e}"
         chat_title = message.chat.title or str(message.chat.id)
         await bot.send_message(
             message.from_user.id,
-            f"Разбан выполнен: пользователь {user_id} в чате {html.escape(chat_title)}."
+            f"Разбан выполнен: пользователь {user_id} в чате {html.escape(chat_title)}.{unrestrict_note}"
         )
     except Exception as e:
         chat_title = message.chat.title or str(message.chat.id)
