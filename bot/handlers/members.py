@@ -31,6 +31,21 @@ async def kick_user_safe(bot: Bot, chat_id: int, user_id: int) -> bool:
         return False
 
 
+async def cleanup_pending_captcha(bot: Bot, chat_id: int, user_id: int):
+    """Удалить сообщение капчи и запись pending, если есть."""
+    pending = await db.get_pending_captcha(chat_id, user_id)
+    if not pending:
+        return
+    try:
+        await bot.delete_message(chat_id, pending['message_id'])
+    except Exception:
+        pass
+    try:
+        await db.remove_pending_captcha(chat_id, user_id)
+    except Exception:
+        pass
+
+
 async def notify_admins(bot: Bot, chat_id: int, message: str):
     """Отправить уведомление всем админам"""
     for admin_id in ADMIN_IDS:
@@ -82,6 +97,7 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
         if 'users_to_kick' in result:
             kick_tasks = []
             for user_id in result['users_to_kick']:
+                await cleanup_pending_captcha(bot, chat.id, user_id)
                 kick_tasks.append(kick_user_safe(bot, chat.id, user_id))
                 chat_logger.log_kick(chat.id, chat.username, user_id, None, "attack_window")
 
@@ -110,6 +126,7 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     # Если нужно кикнуть текущего пользователя
     # Важно: если атака только что завершилась на этом join'е, не кикаем текущего
     if result['should_kick'] and not result['attack_ended']:
+        await cleanup_pending_captcha(bot, chat.id, user.id)
         success = await kick_user_safe(bot, chat.id, user.id)
         if success:
             chat_logger.log_kick(
