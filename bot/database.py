@@ -114,6 +114,16 @@ class Database:
             );
 
             CREATE INDEX IF NOT EXISTS idx_failed_users_chat ON failed_users(chat_id, failed_at);
+
+            CREATE TABLE IF NOT EXISTS scoring_exempt (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scoring_exempt_chat ON scoring_exempt(chat_id, created_at);
         ''')
         await self._connection.commit()
 
@@ -196,10 +206,44 @@ class Database:
             row = await cursor.fetchone()
             return int(row["user_id"]) if row else None
 
+    async def find_user_id_global_by_username(self, username: str) -> Optional[int]:
+        """Найти user_id по username во всех чатах."""
+        normalized = username.lstrip("@").lower()
+        query = (
+            "SELECT user_id, failed_at AS ts FROM failed_users "
+            "WHERE lower(username) = ? "
+            "UNION ALL "
+            "SELECT user_id, verified_at AS ts FROM good_users "
+            "WHERE lower(username) = ? "
+            "ORDER BY ts DESC LIMIT 1"
+        )
+        async with self._connection.execute(
+            query, (normalized, normalized)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return int(row["user_id"]) if row else None
+
     async def remove_chat(self, chat_id: int):
         """Удалить чат из защиты"""
         await self._connection.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
         await self._connection.commit()
+
+    async def add_scoring_exempt(self, chat_id: int, user_id: int):
+        """Добавить пользователя в список одноразового пропуска скоринга."""
+        await self._connection.execute(
+            'INSERT OR REPLACE INTO scoring_exempt (chat_id, user_id, created_at) VALUES (?, ?, ?)',
+            (chat_id, user_id, int(time.time()))
+        )
+        await self._connection.commit()
+
+    async def pop_scoring_exempt(self, chat_id: int, user_id: int) -> bool:
+        """Снять одноразовый пропуск скоринга. Возвращает True если был пропуск."""
+        cursor = await self._connection.execute(
+            'DELETE FROM scoring_exempt WHERE chat_id = ? AND user_id = ?',
+            (chat_id, user_id)
+        )
+        await self._connection.commit()
+        return cursor.rowcount > 0
 
     # === JOIN EVENTS - DEPRECATED ===
     # Все методы удалены, т.к. подсчёт вступлений перенесён в in-memory счётчик

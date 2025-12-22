@@ -81,6 +81,8 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     captcha_enabled = chat_data and chat_data.get('captcha_enabled', False)
     protection_active = chat_data and chat_data.get('protection_active', False)
     scoring_enabled = chat_data and chat_data.get('scoring_enabled', False)
+    scoring_exempt = False
+    risk_score = 0
 
     chat_log_name = chat.username if chat.username else f"chat_{abs(chat.id)}"
     chat_log = logging.getLogger(chat_log_name)
@@ -137,76 +139,88 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     
     # Скоринг работает только в обычном режиме (не в атаке)
     if scoring_enabled and not protection_active and not user.is_bot:
-        try:
-            # Получаем конфиг скоринга
-            scoring_config_data = await db.get_scoring_config(chat.id)
-            if scoring_config_data:
-                # Получаем количество аватаров
-                photo_count = 0
-                try:
-                    photos = await bot.get_user_profile_photos(user.id, limit=100)
-                    photo_count = photos.total_count
-                except Exception as e:
-                    chat_log.warning(f"Не удалось получить фото профиля для {user.id}: {e}")
-                
-                # Получаем статистику
-                stats_data = await db.get_scoring_stats(chat.id, days=7)
-                
-                # Создаём конфиг и статистику
-                cfg = ScoringConfig(
-                    lang_distribution=scoring_config_data['lang_distribution'],
-                    max_lang_risk=scoring_config_data['max_lang_risk'],
-                    no_lang_risk=scoring_config_data['no_lang_risk'],
-                    max_id_risk=scoring_config_data['max_id_risk'],
-                    premium_bonus=scoring_config_data['premium_bonus'],
-                    no_avatar_risk=scoring_config_data['no_avatar_risk'],
-                    one_avatar_risk=scoring_config_data['one_avatar_risk'],
-                    no_username_risk=scoring_config_data['no_username_risk'],
-                    weird_name_risk=scoring_config_data['weird_name_risk'],
-                    exotic_script_risk=scoring_config_data.get('exotic_script_risk', scoring_config_data.get('arabic_cjk_risk', 25)),
-                    special_chars_risk=scoring_config_data.get('special_chars_risk', 15),
-                    repeating_chars_risk=scoring_config_data.get('repeating_chars_risk', 5),
-                    random_username_risk=scoring_config_data['random_username_risk']
+        scoring_exempt = await db.pop_scoring_exempt(chat.id, user.id)
+        if scoring_exempt:
+            chat_log.info(f"Юзер {user.id} пропущен по скорингу (one-time).")
+            if not captcha_enabled:
+                await db.add_good_user(
+                    chat.id, user.id,
+                    user.first_name, user.last_name, user.username,
+                    user.language_code, user.is_premium or False,
+                    0,
+                    scoring_score=0
                 )
-                stats = ScoringStats(
-                    lang_counts=stats_data['lang_counts'],
-                    total_good_joins=stats_data['total_good_joins'],
-                    p95_id=stats_data['p95_id'],
-                    p99_id=stats_data['p99_id']
-                )
-                
-                # Вычисляем скор
-                risk_score = score_user(
-                    user, photo_count=photo_count, cfg=cfg, stats=stats,
-                    chat_id=chat.id, chat_username=chat.username
-                )
-                
-                # Если скор превышает порог - кикаем
-                if risk_score > scoring_config_data['threshold']:
-                    success = await kick_user_safe(bot, chat.id, user.id)
-                    if success:
-                        chat_logger.log_kick(
-                            chat.id, chat.username, user.id,
-                            user.username, f"scoring_{risk_score}"
-                        )
-                    return
-                else:
-                    # Скор прошёл
-                    # Добавляем в good_users только если капча НЕ включена
-                    # (если капча включена - добавим после её прохождения)
-                    if not captcha_enabled:
-                        await db.add_good_user(
-                            chat.id, user.id,
-                            user.first_name, user.last_name, user.username,
-                            user.language_code, user.is_premium or False,
-                            photo_count,
-                            scoring_score=risk_score
-                        )
-                    chat_log.info(
-                        f"Юзер {user.id} прошёл скоринг: score={risk_score} <= threshold={scoring_config_data['threshold']}"
+        else:
+            try:
+                # Получаем конфиг скоринга
+                scoring_config_data = await db.get_scoring_config(chat.id)
+                if scoring_config_data:
+                    # Получаем количество аватаров
+                    photo_count = 0
+                    try:
+                        photos = await bot.get_user_profile_photos(user.id, limit=100)
+                        photo_count = photos.total_count
+                    except Exception as e:
+                        chat_log.warning(f"Не удалось получить фото профиля для {user.id}: {e}")
+                    
+                    # Получаем статистику
+                    stats_data = await db.get_scoring_stats(chat.id, days=7)
+                    
+                    # Создаём конфиг и статистику
+                    cfg = ScoringConfig(
+                        lang_distribution=scoring_config_data['lang_distribution'],
+                        max_lang_risk=scoring_config_data['max_lang_risk'],
+                        no_lang_risk=scoring_config_data['no_lang_risk'],
+                        max_id_risk=scoring_config_data['max_id_risk'],
+                        premium_bonus=scoring_config_data['premium_bonus'],
+                        no_avatar_risk=scoring_config_data['no_avatar_risk'],
+                        one_avatar_risk=scoring_config_data['one_avatar_risk'],
+                        no_username_risk=scoring_config_data['no_username_risk'],
+                        weird_name_risk=scoring_config_data['weird_name_risk'],
+                        exotic_script_risk=scoring_config_data.get('exotic_script_risk', scoring_config_data.get('arabic_cjk_risk', 25)),
+                        special_chars_risk=scoring_config_data.get('special_chars_risk', 15),
+                        repeating_chars_risk=scoring_config_data.get('repeating_chars_risk', 5),
+                        random_username_risk=scoring_config_data['random_username_risk']
                     )
-        except Exception as e:
-            chat_log.error(f"Ошибка скоринга для {user.id}: {e}", exc_info=True)
+                    stats = ScoringStats(
+                        lang_counts=stats_data['lang_counts'],
+                        total_good_joins=stats_data['total_good_joins'],
+                        p95_id=stats_data['p95_id'],
+                        p99_id=stats_data['p99_id']
+                    )
+                    
+                    # Вычисляем скор
+                    risk_score = score_user(
+                        user, photo_count=photo_count, cfg=cfg, stats=stats,
+                        chat_id=chat.id, chat_username=chat.username
+                    )
+                    
+                    # Если скор превышает порог - кикаем
+                    if risk_score > scoring_config_data['threshold']:
+                        success = await kick_user_safe(bot, chat.id, user.id)
+                        if success:
+                            chat_logger.log_kick(
+                                chat.id, chat.username, user.id,
+                                user.username, f"scoring_{risk_score}"
+                            )
+                        return
+                    else:
+                        # Скор прошёл
+                        # Добавляем в good_users только если капча НЕ включена
+                        # (если капча включена - добавим после её прохождения)
+                        if not captcha_enabled:
+                            await db.add_good_user(
+                                chat.id, user.id,
+                                user.first_name, user.last_name, user.username,
+                                user.language_code, user.is_premium or False,
+                                photo_count,
+                                scoring_score=risk_score
+                            )
+                        chat_log.info(
+                            f"Юзер {user.id} прошёл скоринг: score={risk_score} <= threshold={scoring_config_data['threshold']}"
+                        )
+            except Exception as e:
+                chat_log.error(f"Ошибка скоринга для {user.id}: {e}", exc_info=True)
     
     # Показываем капчу если:
     # 1. Это группа (не канал)
@@ -222,7 +236,7 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
             user.id,
             username=user.username,
             full_name=user.full_name,
-            scoring_score=risk_score if 'risk_score' in locals() else 0,
+            scoring_score=risk_score,
         )
         # Больше ничего не делаем - ждём прохождения капчи
         return

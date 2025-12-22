@@ -245,6 +245,58 @@ def _normalize_username(value: str) -> str:
     return value if value.startswith("@") else f"@{value}"
 
 
+def _format_chat_label(chat_data: dict) -> str:
+    username = chat_data.get("username")
+    if username:
+        return f"@{username}"
+    title = chat_data.get("title")
+    if title:
+        return title
+    return str(chat_data.get("chat_id"))
+
+
+async def _unban_and_unrestrict(bot: Bot, chat_id: int, user_id: int) -> str:
+    await bot.unban_chat_member(chat_id, user_id)
+    unrestrict_note = ""
+    try:
+        chat_info = await bot.get_chat(chat_id)
+        permissions = chat_info.permissions
+        if permissions is None:
+            permissions = ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_send_polls=True,
+                can_invite_users=True,
+            )
+        await bot.restrict_chat_member(
+            chat_id,
+            user_id,
+            permissions=permissions
+        )
+        unrestrict_note = " Ограничения сняты."
+    except Exception as e:
+        unrestrict_note = f" Ограничения снять не удалось: {e}"
+    await db.add_scoring_exempt(chat_id, user_id)
+    return unrestrict_note
+
+
+async def _find_unban_targets(bot: Bot, user_id: int):
+    chats = await db.get_all_chats()
+    results = []
+    for chat in chats:
+        chat_id = chat["chat_id"]
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+        except Exception:
+            continue
+        status = getattr(member, "status", None)
+        if status in {"kicked", "restricted"}:
+            results.append((chat, status))
+    return results
+
+
 @router.message(Command("unban"))
 async def cmd_unban(message: Message, bot: Bot):
     """Админская команда /unban @username|user_id для разбана пользователя в чате."""
@@ -256,10 +308,6 @@ async def cmd_unban(message: Message, bot: Bot):
         await bot.delete_message(message.chat.id, message.message_id)
     except Exception:
         pass
-
-    if message.chat.type not in {"group", "supergroup"}:
-        await bot.send_message(message.from_user.id, "Команда /unban работает только в группах.")
-        return
 
     target = _extract_unban_target(message)
     if not target:
@@ -278,7 +326,11 @@ async def cmd_unban(message: Message, bot: Bot):
             user_chat = await bot.get_chat(username)
             user_id = user_chat.id
         except Exception:
-            user_id = await db.find_user_id_by_username(message.chat.id, username)
+            chat_id_for_lookup = message.chat.id if message.chat.type in {"group", "supergroup"} else None
+            if chat_id_for_lookup:
+                user_id = await db.find_user_id_by_username(chat_id_for_lookup, username)
+            if not user_id:
+                user_id = await db.find_user_id_global_by_username(username)
             if not user_id:
                 await bot.send_message(
                     message.from_user.id,
@@ -287,29 +339,44 @@ async def cmd_unban(message: Message, bot: Bot):
                 )
                 return
 
-    try:
-        await bot.unban_chat_member(message.chat.id, user_id)
-        unrestrict_note = ""
-        try:
-            chat_info = await bot.get_chat(message.chat.id)
-            permissions = chat_info.permissions
-            if permissions is None:
-                permissions = ChatPermissions(
-                    can_send_messages=True,
-                    can_send_media_messages=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True,
-                    can_send_polls=True,
-                    can_invite_users=True,
-                )
-            await bot.restrict_chat_member(
-                message.chat.id,
-                user_id,
-                permissions=permissions
+    if message.chat.type == "private":
+        targets = await _find_unban_targets(bot, user_id)
+        if not targets:
+            await bot.send_message(
+                message.from_user.id,
+                f"Не найдено банов/ограничений для пользователя {user_id}."
             )
-            unrestrict_note = " Ограничения сняты."
-        except Exception as e:
-            unrestrict_note = f" Ограничения снять не удалось: {e}"
+            return
+        buttons = []
+        for chat, status in targets:
+            label = _format_chat_label(chat)
+            status_text = "banned" if status == "kicked" else "restricted"
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"{label} ({status_text})",
+                    callback_data=f"unban_chat:{chat['chat_id']}:{user_id}"
+                )
+            ])
+        if len(targets) > 1:
+            buttons.append([
+                InlineKeyboardButton(
+                    text="All",
+                    callback_data=f"unban_all:{user_id}"
+                )
+            ])
+        await bot.send_message(
+            message.from_user.id,
+            f"Где разбанить пользователя {user_id}?",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+        )
+        return
+
+    if message.chat.type not in {"group", "supergroup"}:
+        await bot.send_message(message.from_user.id, "Команда /unban работает только в группах.")
+        return
+
+    try:
+        unrestrict_note = await _unban_and_unrestrict(bot, message.chat.id, user_id)
         chat_title = message.chat.title or str(message.chat.id)
         await bot.send_message(
             message.from_user.id,
@@ -321,6 +388,66 @@ async def cmd_unban(message: Message, bot: Bot):
             message.from_user.id,
             f"Не удалось разбанить {user_id} в чате {html.escape(chat_title)}: {e}"
         )
+
+
+@router.callback_query(F.data.startswith("unban_chat:"))
+async def unban_chat_callback(callback: CallbackQuery, bot: Bot):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        _, chat_id_str, user_id_str = callback.data.split(":")
+        chat_id = int(chat_id_str)
+        user_id = int(user_id_str)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        unrestrict_note = await _unban_and_unrestrict(bot, chat_id, user_id)
+        chat_data = await db.get_chat(chat_id)
+        chat_label = _format_chat_label(chat_data) if chat_data else str(chat_id)
+        await bot.send_message(
+            callback.from_user.id,
+            f"Разбан выполнен: пользователь {user_id} в чате {html.escape(chat_label)}.{unrestrict_note}"
+        )
+        await callback.answer("Готово")
+    except Exception as e:
+        chat_data = await db.get_chat(chat_id)
+        chat_label = _format_chat_label(chat_data) if chat_data else str(chat_id)
+        await bot.send_message(
+            callback.from_user.id,
+            f"Не удалось разбанить {user_id} в чате {html.escape(chat_label)}: {e}"
+        )
+        await callback.answer("Ошибка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("unban_all:"))
+async def unban_all_callback(callback: CallbackQuery, bot: Bot):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        _, user_id_str = callback.data.split(":")
+        user_id = int(user_id_str)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    targets = await _find_unban_targets(bot, user_id)
+    if not targets:
+        await callback.answer("Нечего разбанивать", show_alert=True)
+        return
+    success = 0
+    for chat, _ in targets:
+        try:
+            await _unban_and_unrestrict(bot, chat["chat_id"], user_id)
+            success += 1
+        except Exception:
+            pass
+    await bot.send_message(
+        callback.from_user.id,
+        f"Готово: разбанено {success} чатов для пользователя {user_id}."
+    )
+    await callback.answer("Готово")
 
 
 @router.message(Command("start"))
