@@ -472,7 +472,7 @@ async def unban_all_callback(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data.startswith("allowlist_chat:"))
-async def allowlist_chat_callback(callback: CallbackQuery):
+async def allowlist_chat_callback(callback: CallbackQuery, bot: Bot):
     if not is_admin(callback.from_user.id):
         await callback.answer("Нет доступа", show_alert=True)
         return
