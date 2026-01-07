@@ -278,7 +278,7 @@ async def _unban_and_unrestrict(bot: Bot, chat_id: int, user_id: int) -> str:
         unrestrict_note = " Ограничения сняты."
     except Exception as e:
         unrestrict_note = f" Ограничения снять не удалось: {e}"
-    await db.add_scoring_exempt(chat_id, user_id)
+    await db.add_allowlisted_user(chat_id, user_id)
     return unrestrict_note
 
 

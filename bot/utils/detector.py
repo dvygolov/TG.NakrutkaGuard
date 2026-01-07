@@ -49,6 +49,7 @@ class AttackDetector:
         time_window = chat_data['time_window']
         protect_premium = chat_data['protect_premium']
         protection_active = chat_data['protection_active']
+        is_allowlisted = await db.is_allowlisted_user(chat_id, user.id)
         
         # Считаем вступления в окне - МГНОВЕННО из памяти!
         recent_joins = join_counter.count_in_window(chat_id, time_window)
@@ -64,7 +65,10 @@ class AttackDetector:
         # Режим защиты АКТИВЕН
         if protection_active:
             # Проверяем premium защиту
-            if user.is_premium and protect_premium:
+            if is_allowlisted:
+                result['should_kick'] = False
+                result['reason'] = 'allowlisted'
+            elif user.is_premium and protect_premium:
                 result['should_kick'] = False
                 result['reason'] = 'premium_protected'
             else:
@@ -121,10 +125,13 @@ class AttackDetector:
                         # Проверяем premium защиту
                         if user_data['is_premium'] and protect_premium:
                             continue
+                        # Пропускаем allowlist
+                        if await db.is_allowlisted_user(chat_id, user_data['user_id']):
+                            continue
                         result['users_to_kick'].append(user_data['user_id'])
                 
                 # Кикаем текущего тоже
-                if not (user.is_premium and protect_premium):
+                if not (user.is_premium and protect_premium) and not is_allowlisted:
                     result['should_kick'] = True
                     result['reason'] = 'attack_detected'
                     await db.increment_kicked(chat_id)

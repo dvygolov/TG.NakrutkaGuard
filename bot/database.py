@@ -124,6 +124,16 @@ class Database:
             );
 
             CREATE INDEX IF NOT EXISTS idx_scoring_exempt_chat ON scoring_exempt(chat_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS allowlist_users (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_allowlist_users_chat ON allowlist_users(chat_id, created_at);
         ''')
         await self._connection.commit()
 
@@ -244,6 +254,23 @@ class Database:
         )
         await self._connection.commit()
         return cursor.rowcount > 0
+
+    async def add_allowlisted_user(self, chat_id: int, user_id: int):
+        """Добавить пользователя в allowlist чата."""
+        await self._connection.execute(
+            'INSERT OR REPLACE INTO allowlist_users (chat_id, user_id, created_at) VALUES (?, ?, ?)',
+            (chat_id, user_id, int(time.time()))
+        )
+        await self._connection.commit()
+
+    async def is_allowlisted_user(self, chat_id: int, user_id: int) -> bool:
+        """Проверить, что пользователь в allowlist."""
+        async with self._connection.execute(
+            'SELECT 1 FROM allowlist_users WHERE chat_id = ? AND user_id = ? LIMIT 1',
+            (chat_id, user_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row)
 
     # === JOIN EVENTS - DEPRECATED ===
     # Все методы удалены, т.к. подсчёт вступлений перенесён в in-memory счётчик

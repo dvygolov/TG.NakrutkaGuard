@@ -136,6 +136,17 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                 user.username, result['reason']
             )
         return
+
+    # Allowlist: пропускаем скоринг и капчу
+    if await db.is_allowlisted_user(chat.id, user.id):
+        await db.add_good_user(
+            chat.id, user.id,
+            user.first_name, user.last_name, user.username,
+            user.language_code, user.is_premium or False,
+            0,
+            scoring_score=0
+        )
+        return
     
     # Скоринг работает только в обычном режиме (не в атаке)
     if scoring_enabled and not protection_active and not user.is_bot:
