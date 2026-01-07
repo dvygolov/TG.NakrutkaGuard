@@ -256,8 +256,12 @@ def _format_chat_label(chat_data: dict) -> str:
 
 
 async def _unban_and_unrestrict(bot: Bot, chat_id: int, user_id: int) -> str:
-    await bot.unban_chat_member(chat_id, user_id)
     unrestrict_note = ""
+    unban_note = ""
+    try:
+        await bot.unban_chat_member(chat_id, user_id)
+    except Exception as e:
+        unban_note = f" Разбан не выполнен: {e}"
     try:
         chat_info = await bot.get_chat(chat_id)
         permissions = chat_info.permissions
@@ -279,7 +283,7 @@ async def _unban_and_unrestrict(bot: Bot, chat_id: int, user_id: int) -> str:
     except Exception as e:
         unrestrict_note = f" Ограничения снять не удалось: {e}"
     await db.add_allowlisted_user(chat_id, user_id)
-    return unrestrict_note
+    return f"{unban_note}{unrestrict_note}"
 
 
 async def _find_unban_targets(bot: Bot, user_id: int):
@@ -342,9 +346,26 @@ async def cmd_unban(message: Message, bot: Bot):
     if message.chat.type == "private":
         targets = await _find_unban_targets(bot, user_id)
         if not targets:
+            chats = await db.get_all_chats()
+            if not chats:
+                await bot.send_message(
+                    message.from_user.id,
+                    f"Не найдено банов/ограничений для пользователя {user_id}."
+                )
+                return
+            buttons = []
+            for chat in chats:
+                label = _format_chat_label(chat)
+                buttons.append([
+                    InlineKeyboardButton(
+                        text=label,
+                        callback_data=f"allowlist_chat:{chat['chat_id']}:{user_id}"
+                    )
+                ])
             await bot.send_message(
                 message.from_user.id,
-                f"Не найдено банов/ограничений для пользователя {user_id}."
+                f"Пользователь {user_id} не забанен. Куда добавить в allowlist?",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
             )
             return
         buttons = []
@@ -446,6 +467,28 @@ async def unban_all_callback(callback: CallbackQuery, bot: Bot):
     await bot.send_message(
         callback.from_user.id,
         f"Готово: разбанено {success} чатов для пользователя {user_id}."
+    )
+    await callback.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("allowlist_chat:"))
+async def allowlist_chat_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        _, chat_id_str, user_id_str = callback.data.split(":")
+        chat_id = int(chat_id_str)
+        user_id = int(user_id_str)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    await db.add_allowlisted_user(chat_id, user_id)
+    chat_data = await db.get_chat(chat_id)
+    chat_label = _format_chat_label(chat_data) if chat_data else str(chat_id)
+    await bot.send_message(
+        callback.from_user.id,
+        f"Пользователь {user_id} добавлен в allowlist для чата {html.escape(chat_label)}."
     )
     await callback.answer("Готово")
 
