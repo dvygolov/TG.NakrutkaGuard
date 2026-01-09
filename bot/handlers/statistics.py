@@ -1,6 +1,8 @@
 """Handlers для отображения статистики чата"""
+import html
+import io
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 
 from bot.database import db
 from bot.handlers import statistics_clear
@@ -14,12 +16,65 @@ def get_statistics_menu_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="⚙️ Текущие настройки", callback_data=f"stats_settings_{chat_id}")],
         [InlineKeyboardButton(text="📈 Эффективность защиты", callback_data=f"stats_effectiveness_{chat_id}")],
+        [InlineKeyboardButton(text="📊 График по дням", callback_data=f"stats_daily_{chat_id}")],
+
         [InlineKeyboardButton(text="🔄 История корректировок", callback_data=f"stats_history_{chat_id}")],
         [InlineKeyboardButton(text="❌ Профиль неудачников", callback_data=f"stats_failed_{chat_id}")],
         [InlineKeyboardButton(text="✅ Профиль успешных", callback_data=f"stats_success_{chat_id}")],
         [InlineKeyboardButton(text="◀️ Назад к чату", callback_data=f"chat_{chat_id}")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _build_daily_chart(stats: list, title: str) -> io.BytesIO:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    labels = [item['date'][5:] for item in stats]
+    x = list(range(len(labels)))
+    scoring = [item['scoring_kicked'] for item in stats]
+    failed = [item['failed_captcha'] for item in stats]
+    joined = [item['joined'] for item in stats]
+
+    fig, (ax_chart, ax_table) = plt.subplots(
+        2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [2, 3]}
+    )
+
+    ax_chart.plot(x, scoring, label="Scoring kicks", color="#d9534f", linewidth=2)
+    ax_chart.plot(x, failed, label="Captcha failed", color="#f0ad4e", linewidth=2)
+    ax_chart.plot(x, joined, label="Joined", color="#5cb85c", linewidth=2)
+    ax_chart.set_ylabel("Users")
+    ax_chart.set_title(f"Daily stats (last {len(stats)} days): {title}")
+    ax_chart.grid(True, alpha=0.3)
+    ax_chart.legend(loc="upper left")
+
+    tick_step = 2 if len(labels) <= 20 else 3
+    tick_positions = x[::tick_step]
+    tick_labels = [labels[i] for i in tick_positions]
+    ax_chart.set_xticks(tick_positions)
+    ax_chart.set_xticklabels(tick_labels, rotation=45, ha="right")
+
+    ax_table.axis("off")
+    table_rows = [
+        [item['date'], item['scoring_kicked'], item['failed_captcha'], item['joined']]
+        for item in stats
+    ]
+    table = ax_table.table(
+        cellText=table_rows,
+        colLabels=["Date", "Scoring", "Captcha", "Joined"],
+        loc="center"
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.2)
+
+    fig.tight_layout()
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", dpi=150)
+    plt.close(fig)
+    buffer.seek(0)
+    return buffer
 
 
 @router.callback_query(F.data.startswith("stats_menu_"))
@@ -134,6 +189,33 @@ async def show_effectiveness(callback: CallbackQuery):
             [InlineKeyboardButton(text="◀️ Назад к статистике", callback_data=f"stats_menu_{chat_id}")]
         ]),
         parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("stats_daily_"))
+async def show_daily_chart(callback: CallbackQuery):
+    """Показать график по дням за последние 30 дней."""
+    chat_id = int(callback.data.split("_")[2])
+
+    chat_data = await db.get_chat(chat_id)
+    if not chat_data:
+        await callback.answer("Чат не найден", show_alert=True)
+        return
+
+    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    stats = await db.get_daily_join_stats(chat_id, days=30)
+
+    chart = _build_daily_chart(stats, chat_name)
+    await callback.message.edit_text(
+        f"?? <b>График за последние {len(stats)} дней</b>\n{html.escape(chat_name)}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="?? Назад к статистике", callback_data=f"stats_menu_{chat_id}")]
+        ]),
+        parse_mode="HTML"
+    )
+    await callback.message.answer_photo(
+        BufferedInputFile(chart.getvalue(), filename="daily-stats.png")
     )
     await callback.answer()
 

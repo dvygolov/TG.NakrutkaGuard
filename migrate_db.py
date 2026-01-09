@@ -170,6 +170,40 @@ async def migrate():
             'CREATE INDEX IF NOT EXISTS idx_scoring_exempt_chat ON scoring_exempt(chat_id, created_at)'
         )
         print("✅ scoring_exempt готов")
+
+        # === ALLOWLIST USERS ===
+        print("
+📋 Проверка allowlist_users...")
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS allowlist_users (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            )
+        ''')
+        await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_allowlist_users_chat ON allowlist_users(chat_id, created_at)'
+        )
+        print("✅ allowlist_users готов")
+
+        # === SCORING KICKS ===
+        print("
+📈 Проверка scoring_kicks...")
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS scoring_kicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                kicked_at INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            )
+        ''')
+        await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_scoring_kicks_chat ON scoring_kicks(chat_id, kicked_at)'
+        )
+        print("✅ scoring_kicks готов")
         
         # === СКОР ДЛЯ УСПЕШНЫХ ПОЛЬЗОВАТЕЛЕЙ ===
         print("\n📊 Проверка good_users...")

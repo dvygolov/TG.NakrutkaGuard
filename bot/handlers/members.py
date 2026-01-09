@@ -210,6 +210,7 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
                     if risk_score > scoring_config_data['threshold']:
                         success = await kick_user_safe(bot, chat.id, user.id)
                         if success:
+                            await db.add_scoring_kick(chat.id, user.id)
                             chat_logger.log_kick(
                                 chat.id, chat.username, user.id,
                                 user.username, f"scoring_{risk_score}"

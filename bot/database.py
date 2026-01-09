@@ -115,6 +115,16 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_failed_users_chat ON failed_users(chat_id, failed_at);
 
+            CREATE TABLE IF NOT EXISTS scoring_kicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                kicked_at INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scoring_kicks_chat ON scoring_kicks(chat_id, kicked_at);
+
             CREATE TABLE IF NOT EXISTS scoring_exempt (
                 chat_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
@@ -496,6 +506,14 @@ class Database:
         ''', (chat_id, user_id, first_name, last_name, username, language_code,
               is_premium, photo_count, scoring_score, int(time.time())))
         await self._connection.commit()
+
+    async def add_scoring_kick(self, chat_id: int, user_id: int):
+        """Добавить запись о кике пользователя скорингом (для статистики)."""
+        await self._connection.execute('''
+            INSERT INTO scoring_kicks (chat_id, user_id, kicked_at)
+            VALUES (?, ?, ?)
+        ''', (chat_id, user_id, int(time.time())))
+        await self._connection.commit()
     
     async def get_failed_captcha_stats(self, chat_id: int, days: int = 7, 
                                        min_samples: int = 30) -> Optional[Dict[str, Any]]:
@@ -823,6 +841,55 @@ class Database:
             'p95_id': p95_id,
             'p99_id': p99_id
         }
+
+    async def get_daily_join_stats(self, chat_id: int, days: int = 30) -> List[Dict[str, Any]]:
+        """Получить дневные счетчики: скоринг-кики, провалы капчи, успешные входы."""
+        from datetime import datetime, timedelta, time as time_obj
+
+        end_date = datetime.utcnow().date()
+        start_date = end_date - timedelta(days=days - 1)
+        cutoff_time = int(datetime.combine(start_date, time_obj.min).timestamp())
+
+        async with self._connection.execute('''
+            SELECT date(verified_at, 'unixepoch') as day, COUNT(*) as count
+            FROM good_users
+            WHERE chat_id = ? AND verified_at >= ?
+            GROUP BY day
+        ''', (chat_id, cutoff_time)) as cursor:
+            good_rows = await cursor.fetchall()
+            good_map = {row['day']: row['count'] for row in good_rows}
+
+        async with self._connection.execute('''
+            SELECT date(failed_at, 'unixepoch') as day, COUNT(*) as count
+            FROM failed_users
+            WHERE chat_id = ? AND failed_at >= ?
+            GROUP BY day
+        ''', (chat_id, cutoff_time)) as cursor:
+            failed_rows = await cursor.fetchall()
+            failed_map = {row['day']: row['count'] for row in failed_rows}
+
+        async with self._connection.execute('''
+            SELECT date(kicked_at, 'unixepoch') as day, COUNT(*) as count
+            FROM scoring_kicks
+            WHERE chat_id = ? AND kicked_at >= ?
+            GROUP BY day
+        ''', (chat_id, cutoff_time)) as cursor:
+            scoring_rows = await cursor.fetchall()
+            scoring_map = {row['day']: row['count'] for row in scoring_rows}
+
+        stats = []
+        current = start_date
+        while current <= end_date:
+            day_key = current.isoformat()
+            stats.append({
+                'date': day_key,
+                'scoring_kicked': int(scoring_map.get(day_key, 0)),
+                'failed_captcha': int(failed_map.get(day_key, 0)),
+                'joined': int(good_map.get(day_key, 0)),
+            })
+            current += timedelta(days=1)
+
+        return stats
 
 
 # Глобальный экземпляр
