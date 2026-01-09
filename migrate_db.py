@@ -172,6 +172,54 @@ async def migrate():
         print("✅ scoring_exempt готов")
 
         # === ALLOWLIST USERS ===
+        print("\n📋 Проверка allowlist_users...")
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS allowlist_users (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            )
+        ''')
+        await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_allowlist_users_chat ON allowlist_users(chat_id, created_at)'
+        )
+        print("✅ allowlist_users готов")
+
+        # === SCORING KICKS ===
+        print("\n📈 Проверка scoring_kicks...")
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS scoring_kicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                kicked_at INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            )
+        ''')
+        await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_scoring_kicks_chat ON scoring_kicks(chat_id, kicked_at)'
+        )
+        print("✅ scoring_kicks готов")
+
+        # === ATTACK KICKS ===
+        print("\n⚔️ Проверка attack_kicks...")
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS attack_kicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                kicked_at INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            )
+        ''')
+        await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_attack_kicks_chat ON attack_kicks(chat_id, kicked_at)'
+        )
+        print("✅ attack_kicks готов")
+
+        # === ALLOWLIST USERS ===
         print("
 📋 Проверка allowlist_users...")
         await db.execute('''

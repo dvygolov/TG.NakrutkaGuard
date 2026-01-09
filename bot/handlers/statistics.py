@@ -34,6 +34,7 @@ def _build_daily_chart(stats: list, title: str) -> io.BytesIO:
     labels = [item['date'][5:] for item in stats]
     x = list(range(len(labels)))
     scoring = [item['scoring_kicked'] for item in stats]
+    attack = [item['attack_kicked'] for item in stats]
     failed = [item['failed_captcha'] for item in stats]
     joined = [item['joined'] for item in stats]
 
@@ -41,9 +42,10 @@ def _build_daily_chart(stats: list, title: str) -> io.BytesIO:
         2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [2, 3]}
     )
 
-    ax_chart.plot(x, scoring, label="Scoring kicks", color="#d9534f", linewidth=2)
-    ax_chart.plot(x, failed, label="Captcha failed", color="#f0ad4e", linewidth=2)
-    ax_chart.plot(x, joined, label="Joined", color="#5cb85c", linewidth=2)
+    ax_chart.plot(x, scoring, label="Scoring kicks", color="#0072B2", linewidth=3, marker="o", markersize=3)
+    ax_chart.plot(x, attack, label="Attack kicks", color="#CC79A7", linewidth=3, marker="s", markersize=3)
+    ax_chart.plot(x, failed, label="Captcha failed", color="#E69F00", linewidth=3, marker="^", markersize=3)
+    ax_chart.plot(x, joined, label="Joined", color="#000000", linewidth=3, marker="D", markersize=3)
     ax_chart.set_ylabel("Users")
     ax_chart.set_title(f"Daily stats (last {len(stats)} days): {title}")
     ax_chart.grid(True, alpha=0.3)
@@ -57,12 +59,12 @@ def _build_daily_chart(stats: list, title: str) -> io.BytesIO:
 
     ax_table.axis("off")
     table_rows = [
-        [item['date'], item['scoring_kicked'], item['failed_captcha'], item['joined']]
+        [item['date'], item['scoring_kicked'], item['attack_kicked'], item['failed_captcha'], item['joined']]
         for item in stats
     ]
     table = ax_table.table(
         cellText=table_rows,
-        colLabels=["Date", "Scoring", "Captcha", "Joined"],
+        colLabels=["Date", "Scoring", "Attack", "Captcha", "Joined"],
         loc="center"
     )
     table.auto_set_font_size(False)
@@ -208,9 +210,9 @@ async def show_daily_chart(callback: CallbackQuery):
 
     chart = _build_daily_chart(stats, chat_name)
     await callback.message.edit_text(
-        f"?? <b>График за последние {len(stats)} дней</b>\n{html.escape(chat_name)}",
+        f"📊 <b>График за последние {len(stats)} дней</b>\n{html.escape(chat_name)}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="?? Назад к статистике", callback_data=f"stats_menu_{chat_id}")]
+            [InlineKeyboardButton(text="⬅️ Назад к статистике", callback_data=f"stats_menu_{chat_id}")]
         ]),
         parse_mode="HTML"
     )

@@ -125,6 +125,16 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_scoring_kicks_chat ON scoring_kicks(chat_id, kicked_at);
 
+            CREATE TABLE IF NOT EXISTS attack_kicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                kicked_at INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_attack_kicks_chat ON attack_kicks(chat_id, kicked_at);
+
             CREATE TABLE IF NOT EXISTS scoring_exempt (
                 chat_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
@@ -514,6 +524,14 @@ class Database:
             VALUES (?, ?, ?)
         ''', (chat_id, user_id, int(time.time())))
         await self._connection.commit()
+
+    async def add_attack_kick(self, chat_id: int, user_id: int):
+        """Добавить запись о кике пользователя во время атаки."""
+        await self._connection.execute('''
+            INSERT INTO attack_kicks (chat_id, user_id, kicked_at)
+            VALUES (?, ?, ?)
+        ''', (chat_id, user_id, int(time.time())))
+        await self._connection.commit()
     
     async def get_failed_captcha_stats(self, chat_id: int, days: int = 7, 
                                        min_samples: int = 30) -> Optional[Dict[str, Any]]:
@@ -877,6 +895,15 @@ class Database:
             scoring_rows = await cursor.fetchall()
             scoring_map = {row['day']: row['count'] for row in scoring_rows}
 
+        async with self._connection.execute('''
+            SELECT date(kicked_at, 'unixepoch') as day, COUNT(*) as count
+            FROM attack_kicks
+            WHERE chat_id = ? AND kicked_at >= ?
+            GROUP BY day
+        ''', (chat_id, cutoff_time)) as cursor:
+            attack_rows = await cursor.fetchall()
+            attack_map = {row['day']: row['count'] for row in attack_rows}
+
         stats = []
         current = start_date
         while current <= end_date:
@@ -884,6 +911,7 @@ class Database:
             stats.append({
                 'date': day_key,
                 'scoring_kicked': int(scoring_map.get(day_key, 0)),
+                'attack_kicked': int(attack_map.get(day_key, 0)),
                 'failed_captcha': int(failed_map.get(day_key, 0)),
                 'joined': int(good_map.get(day_key, 0)),
             })

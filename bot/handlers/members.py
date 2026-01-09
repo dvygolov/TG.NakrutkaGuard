@@ -31,6 +31,14 @@ async def kick_user_safe(bot: Bot, chat_id: int, user_id: int) -> bool:
         return False
 
 
+async def kick_attack_user(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """Кикнуть пользователя во время атаки и записать в статистику."""
+    success = await kick_user_safe(bot, chat_id, user_id)
+    if success:
+        await db.add_attack_kick(chat_id, user_id)
+    return success
+
+
 async def cleanup_pending_captcha(bot: Bot, chat_id: int, user_id: int):
     """Удалить сообщение капчи и запись pending, если есть."""
     pending = await db.get_pending_captcha(chat_id, user_id)
@@ -100,14 +108,14 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
             kick_tasks = []
             for user_id in result['users_to_kick']:
                 await cleanup_pending_captcha(bot, chat.id, user_id)
-                kick_tasks.append(kick_user_safe(bot, chat.id, user_id))
+                kick_tasks.append((user_id, kick_attack_user(bot, chat.id, user_id)))
                 chat_logger.log_kick(chat.id, chat.username, user_id, None, "attack_window")
 
             # Выполняем кики параллельно (батчами по 50)
             kicked_count = 0
             for i in range(0, len(kick_tasks), 50):
                 batch = kick_tasks[i:i+50]
-                results = await asyncio.gather(*batch, return_exceptions=True)
+                results = await asyncio.gather(*(task for _, task in batch), return_exceptions=True)
                 # Считаем успешные кики
                 kicked_count += sum(1 for r in results if r is True)
                 # Небольшая задержка между батчами чтобы не словить rate limit
@@ -129,7 +137,10 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     # Важно: если атака только что завершилась на этом join'е, не кикаем текущего
     if result['should_kick'] and not result['attack_ended']:
         await cleanup_pending_captcha(bot, chat.id, user.id)
-        success = await kick_user_safe(bot, chat.id, user.id)
+        if result['reason'] in {"attack_detected", "protection_mode"}:
+            success = await kick_attack_user(bot, chat.id, user.id)
+        else:
+            success = await kick_user_safe(bot, chat.id, user.id)
         if success:
             chat_logger.log_kick(
                 chat.id, chat.username, user.id,
