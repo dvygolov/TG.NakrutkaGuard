@@ -47,6 +47,10 @@ async def handle_group_messages(message: Message, bot: Bot):
     sender_chat = message.sender_chat
     is_channel_post = sender_chat and sender_chat.type == "channel"
 
+    # Если это сообщение от привязанного канала — не модерируем
+    if is_channel_post and linked_channel_id and sender_chat.id == linked_channel_id:
+        return
+
     if (
         not allow_channel_posts
         and is_channel_post
