@@ -13,7 +13,7 @@ async def confirm_clear_good_users(callback: CallbackQuery):
     chat_id = int(callback.data.split("_")[3])
     
     chat_data = await db.get_chat(chat_id)
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     text = f"⚠️ <b>Очистка профиля успешных: {chat_name}</b>\n\n"
     text += "Вы уверены, что хотите удалить все данные о прошедших верификацию пользователях?\n\n"
@@ -45,7 +45,7 @@ async def execute_clear_good_users(callback: CallbackQuery):
     deleted_count = await db.clear_good_users(chat_id)
     
     chat_data = await db.get_chat(chat_id)
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     text = f"✅ <b>Профиль очищен: {chat_name}</b>\n\n"
     text += f"Удалено записей: <b>{deleted_count}</b>\n\n"

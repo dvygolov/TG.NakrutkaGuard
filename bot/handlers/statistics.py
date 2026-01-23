@@ -58,18 +58,29 @@ def _build_daily_chart(stats: list, title: str) -> io.BytesIO:
     ax_chart.set_xticklabels(tick_labels, rotation=45, ha="right")
 
     ax_table.axis("off")
+    total_scoring = sum(item['scoring_kicked'] for item in stats)
+    total_attack = sum(item['attack_kicked'] for item in stats)
+    total_failed = sum(item['failed_captcha'] for item in stats)
+    total_joined = sum(item['joined'] for item in stats)
     table_rows = [
         [item['date'], item['scoring_kicked'], item['attack_kicked'], item['failed_captcha'], item['joined']]
         for item in stats
     ]
+    table_rows.append(["ИТОГО", total_scoring, total_attack, total_failed, total_joined])
     table = ax_table.table(
         cellText=table_rows,
         colLabels=["Date", "Scoring", "Attack", "Captcha", "Joined"],
-        loc="center"
+        colWidths=[0.22, 0.16, 0.16, 0.16, 0.16],
+        loc="center",
+        bbox=[0.07, 0.0, 0.86, 1.0]
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(8)
-    table.scale(1, 1.2)
+    table.set_fontsize(7)
+    table.scale(0.9, 1.15)
+    for col_idx in range(5):
+        header_cell = table[(0, col_idx)]
+        header_cell.set_text_props(weight="bold")
+        header_cell.set_facecolor("#F0F0F0")
 
     fig.tight_layout()
     buffer = io.BytesIO()
@@ -89,7 +100,7 @@ async def show_statistics_menu(callback: CallbackQuery):
         await callback.answer("Чат не найден", show_alert=True)
         return
     
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     await callback.message.edit_text(
         f"📊 <b>Статистика: {chat_name}</b>\n\n"
@@ -112,7 +123,7 @@ async def show_current_settings(callback: CallbackQuery):
         await callback.answer("Скоринг не настроен", show_alert=True)
         return
     
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     text = f"⚙️ <b>Текущие настройки: {chat_name}</b>\n\n"
     
@@ -160,7 +171,7 @@ async def show_effectiveness(callback: CallbackQuery):
     chat_data = await db.get_chat(chat_id)
     stats = await db.get_protection_effectiveness(chat_id, days=7)
     
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     total = stats['verified'] + stats['failed_captcha'] + stats['kicked_in_attack']
     
@@ -205,7 +216,7 @@ async def show_daily_chart(callback: CallbackQuery):
         await callback.answer("Чат не найден", show_alert=True)
         return
 
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     stats = await db.get_daily_join_stats(chat_id, days=30)
 
     chart = _build_daily_chart(stats, chat_name)
@@ -230,7 +241,7 @@ async def show_adjustment_history(callback: CallbackQuery):
     chat_data = await db.get_chat(chat_id)
     failed_stats = await db.get_failed_captcha_stats(chat_id, days=7, min_samples=1)
     
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     text = f"🔄 <b>История корректировок: {chat_name}</b>\n\n"
     
@@ -310,7 +321,7 @@ async def show_failed_profile(callback: CallbackQuery):
     chat_data = await db.get_chat(chat_id)
     failed_stats = await db.get_failed_captcha_stats(chat_id, days=7, min_samples=1)
     
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     text = f"❌ <b>Профиль неудачников: {chat_name}</b>\n\n"
     
@@ -356,7 +367,7 @@ async def show_success_profile(callback: CallbackQuery):
     good_stats = await db.get_good_users_stats(chat_id, days=7, min_samples=1)
     scoring_stats = await db.get_scoring_stats(chat_id, days=7)
     
-    chat_name = chat_data.get('chat_title') or f"ID {chat_id}"
+    chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     text = f"✅ <b>Профиль успешных: {chat_name}</b>\n\n"
     
