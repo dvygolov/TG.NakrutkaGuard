@@ -202,6 +202,7 @@ def get_chat_settings_keyboard(chat_id: int, is_group: bool = True, has_linked_c
             InlineKeyboardButton(text="⏱ Изменить окно", callback_data=f"set_window_{chat_id}")
         ],
         [InlineKeyboardButton(text="👑 Premium защита", callback_data=f"toggle_premium_{chat_id}")],
+        [InlineKeyboardButton(text="🚷 Kick all", callback_data=f"toggle_kickall_{chat_id}")],
         [InlineKeyboardButton(text="🎯 Скоринг", callback_data=f"toggle_scoring_{chat_id}")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data=f"stats_menu_{chat_id}")],
     ]
@@ -789,6 +790,7 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
     has_linked_chat = linked_chat_id is not None
     
     status = "🟢 АКТИВЕН" if chat_data['protection_active'] else "⚪️ ВЫКЛЮЧЕН"
+    kick_all = "🚷 ВКЛЮЧЕН" if chat_data.get('kick_all_active', False) else "⚪️ ВЫКЛЮЧЕН"
     premium = "✅ Да" if chat_data['protect_premium'] else "❌ Нет"
     captcha = "✅ Да" if chat_data.get('captcha_enabled', False) else "❌ Нет"
     
@@ -809,6 +811,7 @@ async def _show_chat_settings_message(callback: CallbackQuery, chat_id: int):
         f"🆔 ID: <code>{chat_id}</code>\n"
         f"👤 Username: @{chat_data['username'] or 'нет'}\n\n"
         f"🛡 Режим защиты: {status}\n"
+        f"🚷 Kick all: {kick_all}\n"
         f"📊 Порог: {chat_data['threshold']} юзеров/{chat_data['time_window']} секунд\n"
         f"👑 Защита Premium: {premium}\n"
         f"🎯 Скоринг: {scoring}"
@@ -855,6 +858,26 @@ async def toggle_premium_protection(callback: CallbackQuery):
     
     await callback.answer(
         f"✅ Premium защита: {'Включена' if new_value else 'Выключена'}",
+        show_alert=True
+    )
+    await _show_chat_settings_message(callback, chat_id)
+
+
+@router.callback_query(F.data.startswith("toggle_kickall_"))
+async def toggle_kick_all(callback: CallbackQuery):
+    """Переключить режим 'kick all' (банить всех новых вступающих)"""
+    chat_id = int(callback.data.split("_")[2])
+    chat_data = await db.get_chat(chat_id)
+
+    if not chat_data:
+        await callback.answer("❌ Чат не найден", show_alert=True)
+        return
+
+    new_value = not bool(chat_data.get("kick_all_active", False))
+    await db.update_chat_settings(chat_id, kick_all_active=new_value)
+
+    await callback.answer(
+        f"✅ Kick all: {'Включен' if new_value else 'Выключен'}",
         show_alert=True
     )
     await _show_chat_settings_message(callback, chat_id)

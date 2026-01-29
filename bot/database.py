@@ -36,6 +36,7 @@ class Database:
                 threshold INTEGER DEFAULT 10,
                 time_window INTEGER DEFAULT 60,
                 protection_active BOOLEAN DEFAULT 0,
+                kick_all_active BOOLEAN DEFAULT 0,
                 protect_premium BOOLEAN DEFAULT 1,
                 allow_channel_posts BOOLEAN DEFAULT 1,
                 captcha_enabled BOOLEAN DEFAULT 0,
@@ -156,6 +157,15 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_allowlist_users_chat ON allowlist_users(chat_id, created_at);
         ''')
         await self._connection.commit()
+
+        # Мягкая миграция: CREATE TABLE IF NOT EXISTS не добавляет новые колонки
+        async with self._connection.execute("PRAGMA table_info(chats)") as cursor:
+            columns = await cursor.fetchall()
+        if "kick_all_active" not in {row["name"] for row in columns}:
+            await self._connection.execute(
+                "ALTER TABLE chats ADD COLUMN kick_all_active BOOLEAN DEFAULT 0"
+            )
+            await self._connection.commit()
 
     # === CHATS ===
 

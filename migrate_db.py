@@ -65,6 +65,14 @@ async def migrate():
         else:
             print("✓ allow_channel_posts уже есть")
 
+        # === KICK ALL MODE ===
+        if 'kick_all_active' not in column_names:
+            print("➕ Добавляем kick_all_active...")
+            await db.execute('ALTER TABLE chats ADD COLUMN kick_all_active BOOLEAN DEFAULT 0')
+            print("✅ kick_all_active добавлен")
+        else:
+            print("✓ kick_all_active уже есть")
+
         # === СКОРИНГ ===
         if 'scoring_enabled' not in column_names:
             print("➕ Добавляем scoring_enabled...")
@@ -220,8 +228,7 @@ async def migrate():
         print("✅ attack_kicks готов")
 
         # === ALLOWLIST USERS ===
-        print("
-📋 Проверка allowlist_users...")
+        print("\n📋 Проверка allowlist_users...")
         await db.execute('''
             CREATE TABLE IF NOT EXISTS allowlist_users (
                 chat_id INTEGER NOT NULL,
@@ -237,8 +244,7 @@ async def migrate():
         print("✅ allowlist_users готов")
 
         # === SCORING KICKS ===
-        print("
-📈 Проверка scoring_kicks...")
+        print("\n📈 Проверка scoring_kicks...")
         await db.execute('''
             CREATE TABLE IF NOT EXISTS scoring_kicks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,5 +1,5 @@
 from aiogram import Router, F, Bot
-from aiogram.types import ChatMemberUpdated
+from aiogram.types import ChatMemberUpdated, ChatJoinRequest
 from aiogram.filters import ChatMemberUpdatedFilter, MEMBER, KICKED, LEFT
 from bot.utils.detector import detector
 from bot.utils.logger import chat_logger
@@ -28,6 +28,22 @@ async def kick_user_safe(bot: Bot, chat_id: int, user_id: int) -> bool:
     except Exception as e:
         # Логируем ошибку но не падаем
         print(f"Error kicking user {user_id} from {chat_id}: {e}")
+        return False
+
+
+async def ban_user_safe(bot: Bot, chat_id: int, user_id: int) -> bool:
+    """
+    Безопасно забанить пользователя в чате (без unban).
+    Нужно для режима kick_all_active, чтобы пользователь не мог зайти повторно.
+    """
+    try:
+        try:
+            await bot.ban_chat_member(chat_id, user_id, revoke_messages=True)
+        except TypeError:
+            await bot.ban_chat_member(chat_id, user_id)
+        return True
+    except Exception as e:
+        print(f"Error banning user {user_id} in {chat_id}: {e}")
         return False
 
 
@@ -75,6 +91,16 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     # Игнорируем самого бота
     if user.id == bot.id:
         return
+
+    chat_data = await db.get_chat(chat.id)
+
+    # Режим "kick all": баним всех новых вступающих/подписывающихся
+    if chat_data and chat_data.get("kick_all_active", False):
+        await cleanup_pending_captcha(bot, chat.id, user.id)
+        success = await ban_user_safe(bot, chat.id, user.id)
+        if success:
+            chat_logger.log_kick(chat.id, chat.username, user.id, user.username, "kick_all")
+        return
     
     # Обрабатываем вступление через детектор
     result = await detector.check_and_handle_join(chat, user)
@@ -84,7 +110,6 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
         return
     
     # === СКОРИНГ И КАПЧА ===
-    chat_data = await db.get_chat(chat.id)
     is_group = chat.type in ["group", "supergroup"]
     captcha_enabled = chat_data and chat_data.get('captcha_enabled', False)
     protection_active = chat_data and chat_data.get('protection_active', False)
@@ -263,6 +288,34 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
         )
         # Больше ничего не делаем - ждём прохождения капчи
         return
+
+
+@router.chat_join_request()
+async def on_chat_join_request(event: ChatJoinRequest, bot: Bot):
+    """
+    Обработчик заявок на вступление (Join Request).
+    В режиме kick_all_active баним пользователя ещё до одобрения заявки.
+    """
+    chat = event.chat
+    user = event.from_user
+
+    # Игнорируем самого бота
+    if user.id == bot.id:
+        return
+
+    chat_data = await db.get_chat(chat.id)
+    if not chat_data or not chat_data.get("kick_all_active", False):
+        return
+
+    # Сначала пытаемся отклонить заявку, затем баним (или наоборот) — оба вызова безопасны
+    try:
+        await bot.decline_chat_join_request(chat.id, user.id)
+    except Exception:
+        pass
+
+    success = await ban_user_safe(bot, chat.id, user.id)
+    if success:
+        chat_logger.log_kick(chat.id, chat.username, user.id, user.username, "kick_all_join_request")
 
 
 @router.chat_member(ChatMemberUpdatedFilter(member_status_changed=[LEFT, KICKED]))
