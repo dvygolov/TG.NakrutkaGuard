@@ -47,25 +47,23 @@ async def handle_group_messages(message: Message, bot: Bot):
     sender_chat = message.sender_chat
     is_channel_post = sender_chat and sender_chat.type == "channel"
 
-    # Если это сообщение от привязанного канала — не модерируем
-    if is_channel_post and linked_channel_id and sender_chat.id == linked_channel_id:
-        return
+    if is_channel_post:
+        # Если это сообщение от привязанного канала — не модерируем
+        if linked_channel_id and sender_chat.id == linked_channel_id:
+            return
 
-    if (
-        not allow_channel_posts
-        and is_channel_post
-        and (not linked_channel_id or sender_chat.id != linked_channel_id)
-    ):
-        try:
-            await bot.delete_message(chat_id, message.message_id)
-        except Exception as e:
-            print(f"[CHANNEL] Не удалось удалить канал-сообщение: {e}")
-        try:
-            warning = await bot.send_message(chat_id, "Запрещено писать в чат от имени каналов!")
-            asyncio.create_task(delete_message_later(bot, chat_id, warning.message_id, delay=60))
-        except Exception as e:
-            print(f"[CHANNEL] Не удалось отправить предупреждение: {e}")
-        return
+        # Если запрещено писать от имени каналов
+        if not allow_channel_posts:
+            try:
+                await bot.delete_message(chat_id, message.message_id)
+            except Exception as e:
+                print(f"[CHANNEL] Не удалось удалить канал-сообщение: {e}")
+            try:
+                warning = await bot.send_message(chat_id, "Запрещено писать в чат от имени каналов!")
+                asyncio.create_task(delete_message_later(bot, chat_id, warning.message_id, delay=60))
+            except Exception as e:
+                print(f"[CHANNEL] Не удалось отправить предупреждение: {e}")
+            return
 
     # 2. Pending капча
     if message.from_user:
