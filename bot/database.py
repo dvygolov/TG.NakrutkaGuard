@@ -155,6 +155,29 @@ class Database:
             );
 
             CREATE INDEX IF NOT EXISTS idx_allowlist_users_chat ON allowlist_users(chat_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS scoring_adjustments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                trigger_samples INTEGER NOT NULL,
+                old_threshold INTEGER,
+                new_threshold INTEGER,
+                old_weights_json TEXT,
+                new_weights_json TEXT,
+                changes_text TEXT NOT NULL,
+                reason_json TEXT,
+                FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scoring_adjustments_chat
+                ON scoring_adjustments(chat_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
         ''')
         await self._connection.commit()
 
@@ -267,6 +290,73 @@ class Database:
         """Удалить чат из защиты"""
         await self._connection.execute('DELETE FROM chats WHERE chat_id = ?', (chat_id,))
         await self._connection.commit()
+
+    # === APP SETTINGS ===
+
+    async def set_app_setting(self, key: str, value: str):
+        """Сохранить глобальную настройку приложения."""
+        await self._connection.execute(
+            '''
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            ''',
+            (key, value, int(time.time()))
+        )
+        await self._connection.commit()
+
+    async def get_app_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Получить глобальную настройку приложения."""
+        async with self._connection.execute(
+            'SELECT value FROM app_settings WHERE key = ?',
+            (key,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return default
+            return row['value']
+
+    async def get_daily_digest_settings(self) -> Dict[str, Any]:
+        """Получить глобальные настройки ежедневного дайджеста."""
+        enabled_raw = await self.get_app_setting("daily_digest_enabled", "0")
+        hour_raw = await self.get_app_setting("daily_digest_hour", "9")
+        minute_raw = await self.get_app_setting("daily_digest_minute", "0")
+
+        try:
+            hour = int(hour_raw)
+        except (TypeError, ValueError):
+            hour = 9
+        try:
+            minute = int(minute_raw)
+        except (TypeError, ValueError):
+            minute = 0
+
+        hour = max(0, min(23, hour))
+        minute = max(0, min(59, minute))
+        enabled = str(enabled_raw).strip().lower() in {"1", "true", "yes", "on"}
+
+        return {
+            "enabled": enabled,
+            "hour": hour,
+            "minute": minute,
+        }
+
+    async def set_daily_digest_settings(
+        self,
+        *,
+        enabled: Optional[bool] = None,
+        hour: Optional[int] = None,
+        minute: Optional[int] = None
+    ):
+        """Обновить глобальные настройки ежедневного дайджеста."""
+        if enabled is not None:
+            await self.set_app_setting("daily_digest_enabled", "1" if enabled else "0")
+        if hour is not None:
+            await self.set_app_setting("daily_digest_hour", str(hour))
+        if minute is not None:
+            await self.set_app_setting("daily_digest_minute", str(minute))
 
     async def add_scoring_exempt(self, chat_id: int, user_id: int):
         """Добавить пользователя в список одноразового пропуска скоринга."""
@@ -815,13 +905,118 @@ class Database:
         return stats
     
     async def get_adjustment_history(self, chat_id: int, limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Получить историю автокорректировок скоринга.
-        Пока возвращаем пустой список, т.к. мы не логируем историю изменений.
-        В будущем можно добавить таблицу scoring_adjustments для логирования.
-        """
-        # TODO: создать таблицу scoring_adjustments для логирования изменений
-        return []
+        """Получить историю автокорректировок скоринга."""
+        async with self._connection.execute(
+            '''
+            SELECT * FROM scoring_adjustments
+            WHERE chat_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            ''',
+            (chat_id, limit)
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        history = []
+        for row in rows:
+            item = dict(row)
+            for field in ("old_weights_json", "new_weights_json", "reason_json"):
+                raw = item.get(field)
+                if raw:
+                    try:
+                        item[field] = json.loads(raw)
+                    except Exception:
+                        pass
+            history.append(item)
+        return history
+
+    async def add_scoring_adjustment(
+        self,
+        *,
+        chat_id: int,
+        trigger_samples: int,
+        old_threshold: Optional[int],
+        new_threshold: Optional[int],
+        old_weights: Dict[str, Any],
+        new_weights: Dict[str, Any],
+        changes: List[str],
+        reason: Dict[str, Any],
+    ):
+        """Записать факт автокорректировки скоринга."""
+        await self._connection.execute(
+            '''
+            INSERT INTO scoring_adjustments (
+                chat_id, created_at, trigger_samples,
+                old_threshold, new_threshold,
+                old_weights_json, new_weights_json,
+                changes_text, reason_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                chat_id,
+                int(time.time()),
+                trigger_samples,
+                old_threshold,
+                new_threshold,
+                json.dumps(old_weights, ensure_ascii=False),
+                json.dumps(new_weights, ensure_ascii=False),
+                "\n".join(changes),
+                json.dumps(reason, ensure_ascii=False),
+            )
+        )
+        await self._connection.commit()
+
+    async def get_daily_digest_events(self, since_ts: int) -> List[Dict[str, Any]]:
+        """Получить агрегированные события для дайджеста по всем чатам."""
+        query = '''
+            SELECT
+                c.chat_id,
+                c.title,
+                c.username,
+                (SELECT COUNT(*)
+                 FROM attack_sessions s
+                 WHERE s.chat_id = c.chat_id AND s.start_time >= ?) AS attacks_started,
+                (SELECT COUNT(*)
+                 FROM attack_sessions s
+                 WHERE s.chat_id = c.chat_id AND s.end_time IS NOT NULL AND s.end_time >= ?) AS attacks_ended,
+                (SELECT COUNT(*)
+                 FROM attack_kicks ak
+                 WHERE ak.chat_id = c.chat_id AND ak.kicked_at >= ?) AS attack_kicks,
+                (SELECT COUNT(*)
+                 FROM scoring_kicks sk
+                 WHERE sk.chat_id = c.chat_id AND sk.kicked_at >= ?) AS scoring_kicks,
+                (SELECT COUNT(*)
+                 FROM failed_users fu
+                 WHERE fu.chat_id = c.chat_id AND fu.failed_at >= ?) AS captcha_failed,
+                (SELECT COUNT(*)
+                 FROM good_users gu
+                 WHERE gu.chat_id = c.chat_id AND gu.verified_at >= ?) AS verified,
+                (SELECT COUNT(*)
+                 FROM scoring_adjustments sa
+                 WHERE sa.chat_id = c.chat_id AND sa.created_at >= ?) AS auto_adjustments
+            FROM chats c
+            ORDER BY c.title
+        '''
+        params = (since_ts, since_ts, since_ts, since_ts, since_ts, since_ts, since_ts)
+        async with self._connection.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+
+        events: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            counters = (
+                item.get("attacks_started", 0),
+                item.get("attacks_ended", 0),
+                item.get("attack_kicks", 0),
+                item.get("scoring_kicks", 0),
+                item.get("captcha_failed", 0),
+                item.get("verified", 0),
+                item.get("auto_adjustments", 0),
+            )
+            if any(v > 0 for v in counters):
+                events.append(item)
+        return events
 
     async def get_scoring_stats(self, chat_id: int, days: int = 7) -> Dict[str, Any]:
         """Получить статистику для скоринга за последние N дней"""

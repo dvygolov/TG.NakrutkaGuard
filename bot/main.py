@@ -8,6 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from bot.config import BOT_TOKEN
 from bot.database import db
 from bot.handlers import setup, moderation, captcha, members, statistics
+from bot.utils.daily_digest import daily_digest_loop
 
 # Настройка логирования
 logging.basicConfig(
@@ -53,6 +54,7 @@ async def main():
     
     # Запуск polling
     logger.info("Starting bot...")
+    digest_task = asyncio.create_task(daily_digest_loop(bot))
     try:
         await dp.start_polling(
             bot,
@@ -60,6 +62,11 @@ async def main():
             drop_pending_updates=True  # Пропускаем старые обновления при старте
         )
     finally:
+        digest_task.cancel()
+        try:
+            await digest_task
+        except asyncio.CancelledError:
+            pass
         # Закрытие соединений при остановке
         await db.close()
         await bot.session.close()

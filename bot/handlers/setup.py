@@ -6,7 +6,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from bot.database import db
 from bot.config import ADMIN_IDS, DEFAULT_THRESHOLD, DEFAULT_TIME_WINDOW, DEFAULT_PROTECT_PREMIUM
+from bot.utils.daily_digest import send_daily_digest
 import html
+import re
 
 router = Router()
 
@@ -508,6 +510,73 @@ async def cmd_start(message: Message):
         reply_markup=await get_main_menu_keyboard(),
         parse_mode="HTML"
     )
+
+
+@router.message(Command("digest"))
+async def cmd_digest(message: Message):
+    """Глобальные настройки ежедневного дайджеста: /digest [on|off]"""
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) >= 2:
+        mode = parts[1].strip().lower()
+        if mode in {"on", "1", "true", "enable"}:
+            await db.set_daily_digest_settings(enabled=True)
+        elif mode in {"off", "0", "false", "disable"}:
+            await db.set_daily_digest_settings(enabled=False)
+        else:
+            await message.answer("❌ Используйте: /digest on или /digest off")
+            return
+
+    settings = await db.get_daily_digest_settings()
+    status = "✅ Включен" if settings["enabled"] else "⛔️ Выключен"
+    await message.answer(
+        "📰 <b>Ежедневный дайджест</b>\n\n"
+        f"Статус: {status}\n"
+        f"Время: <b>{settings['hour']:02d}:{settings['minute']:02d}</b> (серверное локальное)\n\n"
+        "Команды:\n"
+        "• /digest on|off\n"
+        "• /digest_time HH:MM\n"
+        "• /digest_now",
+        parse_mode="HTML"
+    )
+
+
+@router.message(Command("digest_time"))
+async def cmd_digest_time(message: Message):
+    """Установить время ежедневного дайджеста: /digest_time HH:MM"""
+    if not is_admin(message.from_user.id):
+        return
+
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("❌ Используйте формат: /digest_time HH:MM")
+        return
+
+    match = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", parts[1].strip())
+    if not match:
+        await message.answer("❌ Неверный формат времени. Пример: /digest_time 09:30")
+        return
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    await db.set_daily_digest_settings(hour=hour, minute=minute)
+    await message.answer(f"✅ Время дайджеста установлено: <b>{hour:02d}:{minute:02d}</b>", parse_mode="HTML")
+
+
+@router.message(Command("digest_now"))
+async def cmd_digest_now(message: Message, bot: Bot):
+    """Принудительно отправить дайджест за последние 24 часа."""
+    if not is_admin(message.from_user.id):
+        return
+
+    sent = await send_daily_digest(bot)
+    if sent:
+        await message.answer("✅ Дайджест отправлен.")
+    else:
+        await message.answer("ℹ️ За последние 24 часа нет событий для дайджеста.")
 
 
 @router.callback_query(F.data == "main_menu")

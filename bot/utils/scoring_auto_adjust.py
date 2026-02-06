@@ -63,6 +63,20 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
     }
     
     updated_weights = current_weights.copy()
+    current_all_weights = {
+        'max_lang_risk': config['max_lang_risk'],
+        'no_lang_risk': config['no_lang_risk'],
+        'max_id_risk': config['max_id_risk'],
+        'premium_bonus': config['premium_bonus'],
+        'no_avatar_risk': config['no_avatar_risk'],
+        'one_avatar_risk': config['one_avatar_risk'],
+        'no_username_risk': config['no_username_risk'],
+        'weird_name_risk': config['weird_name_risk'],
+        'exotic_script_risk': config.get('exotic_script_risk', config.get('arabic_cjk_risk', 25)),
+        'special_chars_risk': config.get('special_chars_risk', 15),
+        'repeating_chars_risk': config.get('repeating_chars_risk', 5),
+        'random_username_risk': config['random_username_risk'],
+    }
     changes = []
     weights_changed = False
     
@@ -183,29 +197,38 @@ async def auto_adjust_scoring(chat_id: int) -> Optional[Dict[str, Any]]:
         updates = {}
         
         # Сохраняем обновлённые веса как JSON
+        new_all_weights = current_all_weights.copy()
         if weights_changed:
-            # Берём все веса из конфига (не только те что изменились)
-            all_weights = {
-                'max_lang_risk': config['max_lang_risk'],
-                'no_lang_risk': updated_weights['no_lang_risk'],  # используем обновлённый
-                'max_id_risk': updated_weights['max_id_risk'],  # используем обновлённый
-                'premium_bonus': config['premium_bonus'],
+            new_all_weights.update({
+                'no_lang_risk': updated_weights['no_lang_risk'],
+                'max_id_risk': updated_weights['max_id_risk'],
                 'no_avatar_risk': updated_weights['no_avatar_risk'],
                 'one_avatar_risk': updated_weights['one_avatar_risk'],
                 'no_username_risk': updated_weights['no_username_risk'],
                 'weird_name_risk': updated_weights['weird_name_risk'],
                 'exotic_script_risk': updated_weights['exotic_script_risk'],
-                'special_chars_risk': config.get('special_chars_risk', 15),
-                'repeating_chars_risk': config.get('repeating_chars_risk', 5),
                 'random_username_risk': updated_weights['random_username_risk'],
-            }
-            updates['scoring_weights'] = json.dumps(all_weights)
+            })
+            updates['scoring_weights'] = json.dumps(new_all_weights)
         
         # Обновляем порог если изменился
         if threshold_changed:
             updates['scoring_threshold'] = threshold
         
         await db.update_chat_settings(chat_id, **updates)
+        await db.add_scoring_adjustment(
+            chat_id=chat_id,
+            trigger_samples=failed_stats['total_failed'],
+            old_threshold=config['threshold'],
+            new_threshold=threshold,
+            old_weights=current_all_weights,
+            new_weights=new_all_weights,
+            changes=changes,
+            reason={
+                "failed_stats": failed_stats,
+                "good_stats": good_stats or {},
+            },
+        )
         logger.info(f"{chat_name}: применены изменения:\n" + "\n".join(changes))
         return {
             'changes': changes,

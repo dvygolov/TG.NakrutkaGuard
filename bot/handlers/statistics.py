@@ -1,6 +1,7 @@
 """Handlers для отображения статистики чата"""
 import html
 import io
+from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 
@@ -240,10 +241,26 @@ async def show_adjustment_history(callback: CallbackQuery):
     
     chat_data = await db.get_chat(chat_id)
     failed_stats = await db.get_failed_captcha_stats(chat_id, days=7, min_samples=1)
+    history = await db.get_adjustment_history(chat_id, limit=10)
     
     chat_name = chat_data.get('title') or f"ID {chat_id}"
     
     text = f"🔄 <b>История корректировок: {chat_name}</b>\n\n"
+    if history:
+        text += "<b>Последние автокорректировки:</b>\n"
+        for item in history[:5]:
+            ts = datetime.fromtimestamp(item['created_at']).strftime("%d.%m %H:%M")
+            changes = [line for line in (item.get('changes_text') or '').splitlines() if line.strip()]
+            summary = changes[0] if changes else "Обновлены параметры скоринга"
+            text += (
+                f"• <b>{ts}</b> | samples: {item.get('trigger_samples', 0)}\n"
+                f"  {html.escape(summary)}\n"
+            )
+            if item.get('old_threshold') != item.get('new_threshold'):
+                text += f"  threshold: {item.get('old_threshold')} → {item.get('new_threshold')}\n"
+        text += "\n"
+    else:
+        text += "<i>История изменений пока пуста.</i>\n\n"
     
     if not failed_stats:
         text += "<i>Нет данных о провалах капчи.\n"
