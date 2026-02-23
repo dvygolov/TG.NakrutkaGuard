@@ -184,11 +184,43 @@ class Database:
         # Мягкая миграция: CREATE TABLE IF NOT EXISTS не добавляет новые колонки
         async with self._connection.execute("PRAGMA table_info(chats)") as cursor:
             columns = await cursor.fetchall()
-        if "kick_all_active" not in {row["name"] for row in columns}:
+        existing_columns = {row["name"] for row in columns}
+        required_chat_columns = {
+            "kick_all_active": "BOOLEAN DEFAULT 0",
+            "captcha_enabled": "BOOLEAN DEFAULT 0",
+            "welcome_message": "TEXT",
+            "rules_message": "TEXT",
+            "allow_channel_posts": "BOOLEAN DEFAULT 1",
+            "scoring_enabled": "BOOLEAN DEFAULT 0",
+            "scoring_threshold": "INTEGER DEFAULT 50",
+            "scoring_lang_distribution": "TEXT DEFAULT '{\"ru\": 0.8, \"en\": 0.2}'",
+            "scoring_weights": (
+                "TEXT DEFAULT "
+                "'{\"max_lang_risk\": 25, \"no_lang_risk\": 15, \"max_id_risk\": 20, "
+                "\"premium_bonus\": -20, \"no_avatar_risk\": 15, \"one_avatar_risk\": 5, "
+                "\"no_username_risk\": 15, \"weird_name_risk\": 10, \"exotic_script_risk\": 25, "
+                "\"special_chars_risk\": 15, \"repeating_chars_risk\": 5, "
+                "\"random_username_risk\": 15}'"
+            ),
+            "scoring_auto_adjust": "BOOLEAN DEFAULT 1",
+            "use_linked_chat_scoring": "BOOLEAN DEFAULT 0",
+            "linked_chat_id": "INTEGER",
+        }
+        added_columns = []
+        for column_name, column_def in required_chat_columns.items():
+            if column_name in existing_columns:
+                continue
             await self._connection.execute(
-                "ALTER TABLE chats ADD COLUMN kick_all_active BOOLEAN DEFAULT 0"
+                f"ALTER TABLE chats ADD COLUMN {column_name} {column_def}"
             )
+            added_columns.append(column_name)
+
+        if added_columns:
             await self._connection.commit()
+            logger.warning(
+                "Applied startup DB migration for chats: added missing columns %s",
+                ", ".join(added_columns),
+            )
 
     # === CHATS ===
 
