@@ -1,4 +1,4 @@
-from typing import Optional, List, Callable, Awaitable, Any
+from typing import Optional, List, Callable, Awaitable, Any, Dict, Set
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
@@ -9,10 +9,14 @@ from bot.config import ADMIN_IDS, DEFAULT_THRESHOLD, DEFAULT_TIME_WINDOW, DEFAUL
 from bot.utils.daily_digest import send_daily_digest
 import html
 import re
+import secrets
+import time
 
 router = Router()
 
 OFF_KEYWORDS = {"off", "disable", "none", "0"}
+BAN_PICKER_TTL_SECONDS = 60 * 30
+ban_picker_sessions: Dict[str, Dict[str, Any]] = {}
 
 
 async def _is_group_chat(bot, chat_id: int) -> bool:
@@ -302,6 +306,354 @@ async def _find_unban_targets(bot: Bot, user_id: int):
         if status in {"kicked", "restricted"}:
             results.append((chat, status))
     return results
+
+
+def _cleanup_expired_ban_sessions():
+    now = int(time.time())
+    expired_tokens = [
+        token for token, data in ban_picker_sessions.items()
+        if now - int(data.get("created_at", now)) > BAN_PICKER_TTL_SECONDS
+    ]
+    for token in expired_tokens:
+        ban_picker_sessions.pop(token, None)
+
+
+def _get_ban_session(token: str) -> Optional[Dict[str, Any]]:
+    _cleanup_expired_ban_sessions()
+    return ban_picker_sessions.get(token)
+
+
+def _build_ban_picker_keyboard(token: str, chats: List[Dict[str, Any]], selected_chat_ids: Set[int]) -> InlineKeyboardMarkup:
+    buttons = []
+    for chat in chats:
+        chat_id = int(chat["chat_id"])
+        label = str(chat.get("label")) if chat.get("label") else _format_chat_label(chat)
+        mark = "✅" if chat_id in selected_chat_ids else "☑️"
+        button_text = f"{mark} {label}"
+        buttons.append([
+            InlineKeyboardButton(
+                text=button_text[:64],
+                callback_data=f"banpick:{token}:{chat_id}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="✅ Выбрать все", callback_data=f"banpickall:{token}"),
+        InlineKeyboardButton(text="⬜ Снять все", callback_data=f"banpicknone:{token}")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🚫 Забанить выбранные", callback_data=f"banapply:{token}")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"bancancel:{token}")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _build_ban_picker_text(target_label: str, target_kind: str, selected_count: int, total_count: int) -> str:
+    target_type = "канал/чат (sender)" if target_kind == "sender_chat" else "пользователь"
+    return (
+        "🚫 <b>Выбор чатов для бана</b>\n\n"
+        f"Цель: <b>{html.escape(target_label)}</b>\n"
+        f"Тип: <b>{target_type}</b>\n\n"
+        f"Выбрано: <b>{selected_count}</b> из <b>{total_count}</b>\n"
+        "Нажмите по чатам, где нужно забанить."
+    )
+
+
+async def _resolve_ban_target(bot: Bot, raw_target: str) -> Optional[Dict[str, Any]]:
+    target = raw_target.strip()
+    if not target:
+        return None
+
+    if target.lstrip("-").isdigit():
+        target_id = int(target)
+        target_kind = "sender_chat" if target_id < 0 else "user"
+        target_label = str(target_id)
+        try:
+            chat_obj = await bot.get_chat(target_id)
+            if chat_obj.type in {"channel", "supergroup"}:
+                target_kind = "sender_chat"
+                target_label = f"@{chat_obj.username}" if chat_obj.username else (chat_obj.title or str(chat_obj.id))
+            else:
+                target_kind = "user"
+                target_label = f"@{chat_obj.username}" if getattr(chat_obj, "username", None) else str(chat_obj.id)
+        except Exception:
+            pass
+        return {"target_id": target_id, "target_kind": target_kind, "target_label": target_label}
+
+    username = _normalize_username(target)
+    try:
+        chat_obj = await bot.get_chat(username)
+        if chat_obj.type in {"channel", "supergroup"}:
+            target_kind = "sender_chat"
+        else:
+            target_kind = "user"
+        target_label = f"@{chat_obj.username}" if getattr(chat_obj, "username", None) else (chat_obj.title or str(chat_obj.id))
+        return {"target_id": chat_obj.id, "target_kind": target_kind, "target_label": target_label}
+    except Exception:
+        user_id = await db.find_user_id_global_by_username(username)
+        if user_id:
+            return {"target_id": user_id, "target_kind": "user", "target_label": username}
+        return None
+
+
+async def _ban_target_in_chat(bot: Bot, chat_id: int, target_id: int, target_kind: str):
+    if target_kind == "sender_chat":
+        if not hasattr(bot, "ban_chat_sender_chat"):
+            raise RuntimeError("ban_chat_sender_chat не поддерживается текущей версией aiogram")
+        await bot.ban_chat_sender_chat(chat_id, target_id)
+        return
+
+    try:
+        await bot.ban_chat_member(chat_id, target_id, revoke_messages=True)
+    except TypeError:
+        await bot.ban_chat_member(chat_id, target_id)
+
+
+@router.message(Command("ban"))
+async def cmd_ban(message: Message, bot: Bot):
+    """Админская команда /ban @username|id (в личке): мультивыбор чатов/каналов для бана."""
+    if not is_admin(message.from_user.id):
+        return
+
+    # Обрабатываем /ban только в личке; в группах/каналах просто игнорируем.
+    if message.chat.type != "private":
+        return
+
+    target = _extract_unban_target(message)
+    if not target:
+        await bot.send_message(
+            message.from_user.id,
+            "Укажите цель: /ban @username или /ban user_id/channel_id"
+        )
+        return
+
+    resolved = await _resolve_ban_target(bot, target)
+    if not resolved:
+        await bot.send_message(
+            message.from_user.id,
+            "Не удалось определить цель по этому username/id.\n"
+            "Попробуйте указать numeric id."
+        )
+        return
+
+    chats = await db.get_all_chats()
+    if not chats:
+        await bot.send_message(message.from_user.id, "Нет чатов/каналов в базе для применения бана.")
+        return
+
+    token = secrets.token_hex(4)
+    ban_picker_sessions[token] = {
+        "owner_id": message.from_user.id,
+        "target_id": int(resolved["target_id"]),
+        "target_kind": resolved["target_kind"],
+        "target_label": str(resolved["target_label"]),
+        "selected_chat_ids": set(),
+        "created_at": int(time.time()),
+        "chats": [{"chat_id": int(chat["chat_id"]), "label": _format_chat_label(chat)} for chat in chats],
+    }
+
+    selected: Set[int] = ban_picker_sessions[token]["selected_chat_ids"]
+    picker_text = _build_ban_picker_text(
+        target_label=ban_picker_sessions[token]["target_label"],
+        target_kind=ban_picker_sessions[token]["target_kind"],
+        selected_count=len(selected),
+        total_count=len(chats),
+    )
+    keyboard = _build_ban_picker_keyboard(token, chats, selected)
+    await bot.send_message(message.from_user.id, picker_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("banpick:"))
+async def ban_pick_chat_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        _, token, chat_id_str = callback.data.split(":", 2)
+        chat_id = int(chat_id_str)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    session = _get_ban_session(token)
+    if not session:
+        await callback.answer("Сессия истекла, запустите /ban снова.", show_alert=True)
+        return
+    if session["owner_id"] != callback.from_user.id:
+        await callback.answer("Это меню другого администратора.", show_alert=True)
+        return
+
+    selected: Set[int] = session["selected_chat_ids"]
+    if chat_id in selected:
+        selected.remove(chat_id)
+    else:
+        selected.add(chat_id)
+
+    picker_text = _build_ban_picker_text(
+        target_label=session["target_label"],
+        target_kind=session["target_kind"],
+        selected_count=len(selected),
+        total_count=len(session["chats"]),
+    )
+    keyboard = _build_ban_picker_keyboard(token, session["chats"], selected)
+    await callback.message.edit_text(picker_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("banpickall:"))
+async def ban_pick_all_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        _, token = callback.data.split(":", 1)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    session = _get_ban_session(token)
+    if not session:
+        await callback.answer("Сессия истекла, запустите /ban снова.", show_alert=True)
+        return
+    if session["owner_id"] != callback.from_user.id:
+        await callback.answer("Это меню другого администратора.", show_alert=True)
+        return
+
+    selected: Set[int] = session["selected_chat_ids"]
+    selected.clear()
+    for item in session["chats"]:
+        selected.add(int(item["chat_id"]))
+
+    picker_text = _build_ban_picker_text(
+        target_label=session["target_label"],
+        target_kind=session["target_kind"],
+        selected_count=len(selected),
+        total_count=len(session["chats"]),
+    )
+    keyboard = _build_ban_picker_keyboard(token, session["chats"], selected)
+    await callback.message.edit_text(picker_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer("Выбраны все")
+
+
+@router.callback_query(F.data.startswith("banpicknone:"))
+async def ban_pick_none_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        _, token = callback.data.split(":", 1)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    session = _get_ban_session(token)
+    if not session:
+        await callback.answer("Сессия истекла, запустите /ban снова.", show_alert=True)
+        return
+    if session["owner_id"] != callback.from_user.id:
+        await callback.answer("Это меню другого администратора.", show_alert=True)
+        return
+
+    selected: Set[int] = session["selected_chat_ids"]
+    selected.clear()
+
+    picker_text = _build_ban_picker_text(
+        target_label=session["target_label"],
+        target_kind=session["target_kind"],
+        selected_count=len(selected),
+        total_count=len(session["chats"]),
+    )
+    keyboard = _build_ban_picker_keyboard(token, session["chats"], selected)
+    await callback.message.edit_text(picker_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer("Снято")
+
+
+@router.callback_query(F.data.startswith("banapply:"))
+async def ban_apply_callback(callback: CallbackQuery, bot: Bot):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        _, token = callback.data.split(":", 1)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    session = _get_ban_session(token)
+    if not session:
+        await callback.answer("Сессия истекла, запустите /ban снова.", show_alert=True)
+        return
+    if session["owner_id"] != callback.from_user.id:
+        await callback.answer("Это меню другого администратора.", show_alert=True)
+        return
+
+    selected_chat_ids = set(session["selected_chat_ids"])
+    if not selected_chat_ids:
+        await callback.answer("Выберите хотя бы один чат.", show_alert=True)
+        return
+
+    label_map = {int(item["chat_id"]): item["label"] for item in session["chats"]}
+    success_labels: List[str] = []
+    fail_rows: List[str] = []
+    for chat_id in selected_chat_ids:
+        try:
+            await _ban_target_in_chat(
+                bot,
+                chat_id=chat_id,
+                target_id=int(session["target_id"]),
+                target_kind=str(session["target_kind"]),
+            )
+            success_labels.append(label_map.get(chat_id, str(chat_id)))
+        except Exception as e:
+            fail_rows.append(f"• {html.escape(label_map.get(chat_id, str(chat_id)))}: {html.escape(str(e))}")
+
+    ban_picker_sessions.pop(token, None)
+
+    target_label = html.escape(str(session["target_label"]))
+    target_type = "канал/чат (sender)" if session["target_kind"] == "sender_chat" else "пользователь"
+    text = (
+        "✅ <b>Бан выполнен</b>\n\n"
+        f"Цель: <b>{target_label}</b>\n"
+        f"Тип: <b>{target_type}</b>\n"
+        f"Успешно: <b>{len(success_labels)}</b>\n"
+        f"Ошибок: <b>{len(fail_rows)}</b>"
+    )
+    if fail_rows:
+        text += "\n\n⚠️ Ошибки:\n" + "\n".join(fail_rows[:10])
+
+    await callback.message.edit_text(text, parse_mode="HTML")
+    await callback.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("bancancel:"))
+async def ban_cancel_callback(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        _, token = callback.data.split(":", 1)
+    except Exception:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    session = _get_ban_session(token)
+    if not session:
+        await callback.answer("Сессия истекла.", show_alert=True)
+        return
+    if session["owner_id"] != callback.from_user.id:
+        await callback.answer("Это меню другого администратора.", show_alert=True)
+        return
+
+    ban_picker_sessions.pop(token, None)
+    await callback.message.edit_text("❌ Операция бана отменена.")
+    await callback.answer("Отменено")
 
 
 @router.message(Command("unban"))
