@@ -4,7 +4,7 @@ In-memory счётчик вступлений для быстрой детекц
 """
 from collections import deque, defaultdict
 from time import time
-from typing import Dict, Deque
+from typing import Dict, Deque, Optional
 
 
 class JoinCounter:
@@ -76,6 +76,27 @@ class JoinCounter:
             queue.popleft()
         
         return [{'user_id': user_id, 'is_premium': is_premium} for _, user_id, is_premium in queue]
+
+    def get_attack_cooldown_until(self, chat_id: int, window_seconds: int, threshold: int) -> Optional[float]:
+        """
+        Вернуть timestamp, после которого в окне останется меньше threshold вступлений.
+        """
+        if threshold <= 0:
+            return None
+
+        now = time()
+        cutoff = now - window_seconds
+
+        queue = self._joins[chat_id]
+        while queue and queue[0] < cutoff:
+            queue.popleft()
+
+        if len(queue) < threshold:
+            return None
+
+        decisive_index = len(queue) - threshold
+        decisive_join_ts = queue[decisive_index]
+        return decisive_join_ts + window_seconds
     
     def clear_chat(self, chat_id: int):
         """Очистить данные чата (например, при удалении из защиты)"""

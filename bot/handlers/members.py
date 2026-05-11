@@ -167,6 +167,8 @@ async def on_new_member(event: ChatMemberUpdated, bot: Bot):
         else:
             success = await kick_user_safe(bot, chat.id, user.id)
         if success:
+            if result['reason'] in {"attack_detected", "protection_mode"}:
+                await db.increment_kicked(chat.id)
             chat_logger.log_kick(
                 chat.id, chat.username, user.id,
                 user.username, result['reason']

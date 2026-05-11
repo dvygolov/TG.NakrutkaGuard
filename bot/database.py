@@ -57,7 +57,10 @@ class Database:
                 chat_id INTEGER NOT NULL,
                 start_time INTEGER NOT NULL,
                 end_time INTEGER,
+                total_joins INTEGER DEFAULT 0,
                 total_kicked INTEGER DEFAULT 0,
+                last_join_at INTEGER,
+                cooldown_until INTEGER,
                 FOREIGN KEY (chat_id) REFERENCES chats(chat_id)
             );
 
@@ -219,6 +222,30 @@ class Database:
             await self._connection.commit()
             logger.warning(
                 "Applied startup DB migration for chats: added missing columns %s",
+                ", ".join(added_columns),
+            )
+
+        async with self._connection.execute("PRAGMA table_info(attack_sessions)") as cursor:
+            columns = await cursor.fetchall()
+        existing_columns = {row["name"] for row in columns}
+        required_attack_columns = {
+            "total_joins": "INTEGER DEFAULT 0",
+            "last_join_at": "INTEGER",
+            "cooldown_until": "INTEGER",
+        }
+        added_columns = []
+        for column_name, column_def in required_attack_columns.items():
+            if column_name in existing_columns:
+                continue
+            await self._connection.execute(
+                f"ALTER TABLE attack_sessions ADD COLUMN {column_name} {column_def}"
+            )
+            added_columns.append(column_name)
+
+        if added_columns:
+            await self._connection.commit()
+            logger.warning(
+                "Applied startup DB migration for attack_sessions: added missing columns %s",
                 ", ".join(added_columns),
             )
 
@@ -430,22 +457,33 @@ class Database:
 
     # === ATTACK SESSIONS ===
 
-    async def start_attack_session(self, chat_id: int, start_time: Optional[int] = None) -> int:
+    async def start_attack_session(
+        self,
+        chat_id: int,
+        start_time: Optional[int] = None,
+        total_joins: int = 0,
+        last_join_at: Optional[int] = None,
+        cooldown_until: Optional[int] = None,
+    ) -> int:
         """Начать новую сессию атаки"""
         start_time = start_time or int(time.time())
+        last_join_at = last_join_at if last_join_at is not None else start_time
         cursor = await self._connection.execute('''
-            INSERT INTO attack_sessions (chat_id, start_time)
-            VALUES (?, ?)
-        ''', (chat_id, start_time))
+            INSERT INTO attack_sessions (
+                chat_id, start_time, total_joins, last_join_at, cooldown_until
+            )
+            VALUES (?, ?, ?, ?, ?)
+        ''', (chat_id, start_time, total_joins, last_join_at, cooldown_until))
         await self._connection.commit()
         return cursor.lastrowid
 
-    async def end_attack_session(self, chat_id: int):
+    async def end_attack_session(self, chat_id: int, end_time: Optional[int] = None):
         """Завершить текущую сессию атаки"""
+        end_time = end_time or int(time.time())
         await self._connection.execute('''
             UPDATE attack_sessions SET end_time = ?
             WHERE chat_id = ? AND end_time IS NULL
-        ''', (int(time.time()), chat_id))
+        ''', (end_time, chat_id))
         await self._connection.commit()
 
     async def increment_kicked(self, chat_id: int):
@@ -454,6 +492,41 @@ class Database:
             UPDATE attack_sessions SET total_kicked = total_kicked + 1
             WHERE chat_id = ? AND end_time IS NULL
         ''', (chat_id,))
+        await self._connection.commit()
+
+    async def update_attack_session_activity(
+        self,
+        chat_id: int,
+        *,
+        increment_joins: int = 0,
+        last_join_at: Optional[int] = None,
+        cooldown_until: Optional[int] = None,
+    ):
+        """Обновить статистику текущей атаки."""
+        updates = []
+        values = []
+
+        if increment_joins:
+            updates.append("total_joins = total_joins + ?")
+            values.append(increment_joins)
+        if last_join_at is not None:
+            updates.append("last_join_at = ?")
+            values.append(last_join_at)
+        if cooldown_until is not None:
+            updates.append("cooldown_until = ?")
+            values.append(cooldown_until)
+        if not updates:
+            return
+
+        values.append(chat_id)
+        await self._connection.execute(
+            f'''
+            UPDATE attack_sessions
+            SET {", ".join(updates)}
+            WHERE chat_id = ? AND end_time IS NULL
+            ''',
+            values
+        )
         await self._connection.commit()
 
     async def get_current_attack_stats(self, chat_id: int) -> Optional[Dict[str, Any]]:

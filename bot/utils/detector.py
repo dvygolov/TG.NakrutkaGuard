@@ -8,6 +8,45 @@ import time
 
 class AttackDetector:
     """Детектор атак и управление режимом защиты"""
+
+    async def _finalize_expired_attack_if_needed(
+        self,
+        chat_id: int,
+        chat_username: Optional[str],
+        chat_data: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Закрыть зависшую атаку по фактическому моменту затухания до обработки нового join."""
+        if not chat_data.get('protection_active'):
+            return None
+
+        stats = await db.get_current_attack_stats(chat_id)
+        if not stats:
+            return None
+
+        cooldown_until = stats.get('cooldown_until')
+        if not cooldown_until or int(time.time()) < cooldown_until:
+            return None
+
+        changed = await db.set_protection_active(chat_id, False)
+        if not changed:
+            return None
+
+        await db.end_attack_session(chat_id, end_time=cooldown_until)
+        attack_end_message = await self.get_attack_stats_message(chat_id)
+        ended_stats = await db.get_last_attack_stats(chat_id)
+        if ended_stats:
+            duration = ended_stats['end_time'] - ended_stats['start_time']
+            total_joins = ended_stats.get('total_joins') or 0
+            chat_logger.log_attack_end(
+                chat_id, chat_username, duration, total_joins, ended_stats['total_kicked']
+            )
+            chat_logger.log_protection_mode(chat_id, chat_username, False)
+
+        chat_data['protection_active'] = False
+        return {
+            'attack_ended': True,
+            'attack_end_message': attack_end_message,
+        }
     
     async def check_and_handle_join(self, chat: Chat, user: User) -> Dict[str, Any]:
         """
@@ -34,6 +73,10 @@ class AttackDetector:
                 'attack_started': False,
                 'attack_ended': False
             }
+
+        expired_attack = await self._finalize_expired_attack_if_needed(
+            chat_id, chat_username, chat_data
+        )
         
         # Добавляем вступление в in-memory счётчик
         join_counter.add_join(chat_id, user.id, user.is_premium or False)
@@ -61,9 +104,21 @@ class AttackDetector:
             'attack_ended': False,
             'attack_end_message': None
         }
+
+        if expired_attack:
+            result.update(expired_attack)
         
         # Режим защиты АКТИВЕН
         if protection_active:
+            cooldown_until = join_counter.get_attack_cooldown_until(chat_id, time_window, threshold)
+            if cooldown_until is not None:
+                await db.update_attack_session_activity(
+                    chat_id,
+                    increment_joins=1,
+                    last_join_at=int(time.time()),
+                    cooldown_until=int(cooldown_until),
+                )
+
             # Проверяем premium защиту
             if is_allowlisted:
                 result['should_kick'] = False
@@ -74,14 +129,17 @@ class AttackDetector:
             else:
                 result['should_kick'] = True
                 result['reason'] = 'protection_mode'
-                await db.increment_kicked(chat_id)
             
             # Проверяем не пора ли выключить защиту
             if recent_joins < threshold:
                 changed = await db.set_protection_active(chat_id, False)
                 if changed:
                     # Атака закончилась!
-                    await db.end_attack_session(chat_id)
+                    end_time = int(time.time())
+                    current_stats = await db.get_current_attack_stats(chat_id)
+                    if current_stats and current_stats.get('cooldown_until'):
+                        end_time = current_stats['cooldown_until']
+                    await db.end_attack_session(chat_id, end_time=end_time)
                     
                     result['attack_ended'] = True
                     result['attack_end_message'] = await self.get_attack_stats_message(chat_id)
@@ -90,8 +148,7 @@ class AttackDetector:
                     stats = await db.get_last_attack_stats(chat_id)
                     if stats:
                         duration = stats['end_time'] - stats['start_time']
-                        # Приблизительное кол-во joins (т.к. точная история не хранится)
-                        total_joins = stats['total_kicked']
+                        total_joins = stats.get('total_joins') or 0
                         chat_logger.log_attack_end(
                             chat_id, chat_username, duration, total_joins, stats['total_kicked']
                         )
@@ -106,7 +163,14 @@ class AttackDetector:
                 if changed:
                     # АТАКА! Включаем защиту
                     attack_start_time = int(time.time())
-                    await db.start_attack_session(chat_id, attack_start_time)
+                    cooldown_until = join_counter.get_attack_cooldown_until(chat_id, time_window, threshold)
+                    await db.start_attack_session(
+                        chat_id,
+                        attack_start_time,
+                        total_joins=recent_joins,
+                        last_join_at=attack_start_time,
+                        cooldown_until=int(cooldown_until) if cooldown_until is not None else None,
+                    )
                     
                     result['attack_started'] = True
                     
@@ -134,7 +198,6 @@ class AttackDetector:
                 if not (user.is_premium and protect_premium) and not is_allowlisted:
                     result['should_kick'] = True
                     result['reason'] = 'attack_detected'
-                    await db.increment_kicked(chat_id)
         
         return result
     
@@ -157,6 +220,7 @@ class AttackDetector:
             f"✅ <b>АТАКА ЗАВЕРШЕНА</b>\n"
             f"📍 Чат: {chat_ref}\n\n"
             f"⏱ Длительность: {duration_min}м {duration_sec}с\n"
+            f"👥 Вступлений: {stats.get('total_joins') or 0}\n"
             f"🚫 Кикнуто: {stats['total_kicked']}\n"
         )
         
