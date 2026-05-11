@@ -1,4 +1,5 @@
 from typing import Sequence
+import unicodedata
 from aiogram import Router, F, Bot
 from aiogram.types import Message
 from bot.database import db
@@ -37,13 +38,34 @@ def _normalize_stop_word_text(text: str) -> str:
     return text.lower().translate(_LATIN_TO_CYRILLIC)
 
 
+def _strip_invisible_and_spaces(text: str) -> str:
+    """
+    Удалить невидимые символы форматирования, управляющие символы и пробелы.
+    """
+    result = []
+    for ch in text:
+        category = unicodedata.category(ch)
+        if category == "Cf":
+            continue
+        if category.startswith("C"):
+            continue
+        if ch.isspace():
+            continue
+        result.append(ch)
+    return "".join(result)
+
+
 def _contains_stop_word(text: str, words: Sequence[str]) -> bool:
     lowered = text.lower()
     normalized = _normalize_stop_word_text(text)
+    compact_normalized = _strip_invisible_and_spaces(normalized)
     for word in words:
         if word in lowered:
             return True
-        if _normalize_stop_word_text(word) in normalized:
+        normalized_word = _normalize_stop_word_text(word)
+        if normalized_word in normalized:
+            return True
+        if _strip_invisible_and_spaces(normalized_word) in compact_normalized:
             return True
     return False
 
