@@ -1,6 +1,6 @@
 from aiogram import Router, F, Bot
 from aiogram.types import ChatMemberUpdated, ChatJoinRequest
-from aiogram.filters import ChatMemberUpdatedFilter, MEMBER, KICKED, LEFT
+from aiogram.filters import ChatMemberUpdatedFilter, JOIN_TRANSITION, KICKED, LEFT
 from bot.utils.detector import detector
 from bot.utils.logger import chat_logger
 from bot.utils.scoring import score_user, ScoringConfig, ScoringStats
@@ -79,7 +79,7 @@ async def notify_admins(bot: Bot, chat_id: int, message: str):
             print(f"Error notifying admin {admin_id}: {e}")
 
 
-@router.chat_member(ChatMemberUpdatedFilter(member_status_changed=MEMBER))
+@router.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
 async def on_new_member(event: ChatMemberUpdated, bot: Bot):
     """
     Обработчик новых участников в чате/канале
