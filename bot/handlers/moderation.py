@@ -7,6 +7,21 @@ import asyncio
 
 router = Router()
 
+_LATIN_TO_CYRILLIC = str.maketrans({
+    "a": "а",
+    "b": "в",
+    "c": "с",
+    "e": "е",
+    "h": "н",
+    "k": "к",
+    "m": "м",
+    "o": "о",
+    "p": "р",
+    "t": "т",
+    "x": "х",
+    "y": "у",
+})
+
 
 def _is_not_command(message: Message) -> bool:
     """True если сообщение не начинается с команды."""
@@ -14,9 +29,23 @@ def _is_not_command(message: Message) -> bool:
     return not text.startswith("/")
 
 
+def _normalize_stop_word_text(text: str) -> str:
+    """
+    Нормализовать текст для проверки стоп-слов.
+    Схлопывает часто используемые латинские омоглифы в кириллицу.
+    """
+    return text.lower().translate(_LATIN_TO_CYRILLIC)
+
+
 def _contains_stop_word(text: str, words: Sequence[str]) -> bool:
     lowered = text.lower()
-    return any(word in lowered for word in words)
+    normalized = _normalize_stop_word_text(text)
+    for word in words:
+        if word in lowered:
+            return True
+        if _normalize_stop_word_text(word) in normalized:
+            return True
+    return False
 
 
 @router.message(_is_not_command, F.chat.type.in_({"group", "supergroup"}))
